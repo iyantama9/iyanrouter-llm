@@ -1,0 +1,592 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Iyan Router{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex bg-background" x-data="dashboard()" x-init="init()">
+
+  <!-- Mobile overlay -->
+  <div x-show="sidebarOpen" x-transition.opacity
+       @click="sidebarOpen = false"
+       class="fixed inset-0 bg-black/40 z-40 lg:hidden"></div>
+
+  <!-- Sidebar -->
+  <aside class="fixed lg:static inset-y-0 left-0 z-50 w-64 flex flex-col border-r border-border bg-card/95 backdrop-blur transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)]"
+         :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'">
+
+    <!-- Brand -->
+    <div class="px-5 py-6 border-b border-border flex items-center gap-3">
+      <div class="w-9 h-9 rounded bg-secondary border border-border flex items-center justify-center text-primary shadow-sm">
+        <i data-lucide="network" class="w-[18px] h-[18px]"></i>
+      </div>
+      <div class="leading-tight">
+        <div class="font-display text-lg font-semibold tracking-wide uppercase text-foreground leading-none">Iyan Router</div>
+        <div class="text-[10px] text-muted-foreground tracking-[0.15em] uppercase mt-0.5">API Proxy</div>
+      </div>
+    </div>
+
+    <!-- Navigation -->
+    <nav class="flex-1 px-3 py-5 space-y-1 overflow-y-auto">
+      <div class="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.12em] px-3 mb-2">Overview</div>
+      <button @click="activeTab = 'activity'; sidebarOpen = false"
+              class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-all duration-200"
+              :class="activeTab === 'activity' ? 'bg-primary/10 text-primary border border-primary/20' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'">
+        <i data-lucide="activity" class="w-[18px] h-[18px]"></i>
+        Live Activity
+      </button>
+      <button @click="activeTab = 'keys'; sidebarOpen = false"
+              class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm transition-all duration-200"
+              :class="activeTab === 'keys' ? 'bg-primary/10 text-primary border border-primary/20' : 'text-muted-foreground hover:bg-secondary hover:text-foreground'">
+        <i data-lucide="key-round" class="w-[18px] h-[18px]"></i>
+        API Keys
+      </button>
+
+      <div class="text-[10px] font-semibold text-muted-foreground/60 uppercase tracking-[0.12em] px-3 mt-6 mb-2">Quick Stats</div>
+      <div class="px-3 space-y-2.5">
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-muted-foreground">Total Requests</span>
+          <span class="font-mono font-medium text-foreground tabular-nums" x-text="formatNumber(stats.total_requests)">—</span>
+        </div>
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-muted-foreground">Rotations</span>
+          <span class="font-mono font-medium text-foreground tabular-nums" x-text="stats.failover_count">—</span>
+        </div>
+        <div class="flex items-center justify-between text-xs">
+          <span class="text-muted-foreground">Active Index</span>
+          <span class="font-mono font-medium text-foreground tabular-nums" x-text="`${stats.active_key_index + 1}/${stats.total_keys}`">—</span>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Sidebar Footer -->
+    <div class="p-3 border-t border-border space-y-2">
+      <div class="flex items-center gap-2 px-3 py-2">
+        <div class="relative w-1.5 h-1.5">
+          <div class="absolute inset-0 bg-accent rounded-full pulse-ring"></div>
+        </div>
+        <span class="text-xs text-muted-foreground font-medium">Server online</span>
+      </div>
+      <button @click="logout()"
+              class="w-full flex items-center gap-3 px-3 py-2.5 rounded-md text-sm text-muted-foreground hover:bg-destructive/10 hover:text-destructive hover:border hover:border-destructive/20 transition-all">
+        <i data-lucide="log-out" class="w-[18px] h-[18px]"></i>
+        Sign Out
+      </button>
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="flex-1 min-w-0 flex flex-col overflow-hidden">
+
+    <!-- Header -->
+    <header class="h-16 border-b border-border bg-card/50 backdrop-blur-sm flex items-center justify-between px-4 lg:px-8 shrink-0">
+      <div class="flex items-center gap-4">
+        <button @click="sidebarOpen = !sidebarOpen" class="lg:hidden p-2 rounded-md hover:bg-secondary transition-colors text-muted-foreground">
+          <i data-lucide="menu" class="w-5 h-5"></i>
+        </button>
+        <div>
+          <h1 class="font-display text-2xl lg:text-3xl font-light tracking-tight text-foreground uppercase leading-none"
+              x-text="activeTab === 'activity' ? 'Live Activity' : 'API Keys'">Live Activity</h1>
+          <p class="text-xs text-muted-foreground mt-1" x-text="activeTab === 'activity' ? 'Real-time request logs from the proxy' : 'Manage API key rotation and failover'">
+            Real-time request logs from the proxy
+          </p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <!-- Theme toggle -->
+        <button @click="dark = !dark; $dispatch('theme-changed', dark)"
+                class="p-2 rounded-md hover:bg-secondary transition-colors text-muted-foreground border border-border/50"
+                title="Toggle theme">
+          <template x-if="dark">
+            <i data-lucide="sun" class="w-4 h-4"></i>
+          </template>
+          <template x-if="!dark">
+            <i data-lucide="moon" class="w-4 h-4"></i>
+          </template>
+        </button>
+        <!-- Live badge -->
+        <div class="hidden sm:flex items-center gap-2 text-xs text-muted-foreground bg-secondary border border-border rounded-full px-3 py-1.5">
+          <div class="w-1.5 h-1.5 rounded-full bg-accent animate-pulse"></div>
+          <span>Live <span x-text="sseConnected ? '• SSE' : '(Polling)'">• SSE</span></span>
+        </div>
+      </div>
+    </header>
+
+    <!-- Scrollable Body -->
+    <div class="flex-1 overflow-y-auto p-4 lg:p-8 space-y-6">
+
+      <!-- Metric Strip -->
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-4">
+        <template x-for="(metric, i) in metrics" :key="metric.id">
+          <div class="gold-seam bg-card border border-border rounded-lg p-4 lg:p-5 relative overflow-hidden group transition-all duration-300 hover:shadow-lg hover:border-primary/30"
+               :style="`animation-delay: ${i * 100}ms`"
+               x-data="{ showSpark: false }" x-init="setTimeout(() => showSpark = true, 300 + i * 100)">
+            <div class="flex items-center gap-2 mb-3">
+              <i :data-lucide="metric.icon" class="w-4 h-4 text-muted-foreground"></i>
+              <span class="text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.12em] font-mono" x-text="metric.label">Metric</span>
+            </div>
+            <div class="text-2xl lg:text-3xl font-mono font-medium text-foreground tabular-nums leading-none mb-1.5" x-text="metric.value">—</div>
+            <div class="text-[11px] text-muted-foreground" x-text="metric.sub">sub</div>
+
+            <!-- Sparkline background -->
+            <template x-if="showSpark && metric.spark && metric.spark.length > 1">
+              <svg class="absolute bottom-0 left-0 right-0 h-10 opacity-[0.06] group-hover:opacity-[0.12] transition-opacity pointer-events-none" preserveAspectRatio="none">
+                <path :d="sparkLine(metric.spark, 100, 40)" fill="none" stroke="currentColor" stroke-width="1.5" class="text-primary"></path>
+                <path :d="sparkArea(metric.spark, 100, 40)" fill="currentColor" class="text-primary" stroke="none"></path>
+              </svg>
+            </template>
+          </div>
+        </template>
+      </div>
+
+      <!-- ===== ACTIVITY TAB ===== -->
+      <div x-show="activeTab === 'activity'" class="space-y-6" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-2" x-transition:enter-end="opacity-100 translate-y-0">
+
+        <!-- Controls -->
+        <div class="flex flex-col sm:flex-row gap-3 sm:items-center justify-between">
+          <div class="flex items-center gap-2">
+            <i data-lucide="list" class="w-4 h-4 text-primary"></i>
+            <h2 class="text-xs font-semibold text-muted-foreground uppercase tracking-[0.12em] font-mono">Request Log</h2>
+            <span class="text-[10px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-full border border-border font-mono"
+                  x-text="`${logs.total} entries`">— entries</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <div class="relative">
+              <i data-lucide="search" class="w-3.5 h-3.5 text-muted-foreground/50 absolute left-2.5 top-1/2 -translate-y-1/2"></i>
+              <input type="text" x-model="logs.search" @input.debounce.300="fetchLogs()" placeholder="Search model or key..."
+                     class="w-full sm:w-48 bg-input border border-border text-foreground rounded-md pl-8 pr-3 py-1.5 text-xs placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-ring">
+            </div>
+          </div>
+        </div>
+
+        <!-- Table -->
+        <div class="bg-card border border-border rounded-lg overflow-hidden shadow-sm">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-border bg-secondary/50">
+                  <template x-for="col in ['Time', 'Model', 'Status', 'Key', 'Latency']">
+                    <th class="text-left px-4 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.12em] font-mono cursor-pointer select-none hover:text-foreground transition-colors"
+                        @click="sortBy(col.toLowerCase().replace(' ', '_'))">
+                      <span class="flex items-center gap-1" x-html="col"></span>
+                    </th>
+                  </template>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-if="logs.loading">
+                  <tr><td colspan="5" class="px-4 py-6"><div class="animate-shimmer h-6 rounded max-w-md mx-auto"></div></td></tr>
+                </template>
+                <template x-if="!logs.loading && !logs.items.length">
+                  <tr>
+                    <td colspan="5" class="px-4 py-12 text-center">
+                      <div class="flex flex-col items-center gap-3 text-muted-foreground">
+                        <i data-lucide="activity" class="w-10 h-10 opacity-20"></i>
+                        <p class="text-sm font-medium">No requests yet</p>
+                        <p class="text-xs opacity-60">Proxy requests will appear here in real-time</p>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+                <template x-for="log in logs.items" :key="log.timestamp + log.key_used + Math.random()">
+                  <tr class="border-b border-border/50 hover:bg-secondary/30 transition-colors"
+                      :class="log.rotated ? 'bg-destructive/[0.04]' : ''">
+                    <td class="px-4 py-3 font-mono text-xs text-muted-foreground tabular-nums" x-text="log.timestamp">--:--:--</td>
+                    <td class="px-4 py-3 max-w-[200px] truncate" x-text="log.model || '—'">—</td>
+                    <td class="px-4 py-3">
+                      <span class="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-mono font-medium uppercase tracking-wider border"
+                            :class="log.status_code === 200 ? 'bg-accent/10 text-accent border-accent/20' :
+                                    log.status_code >= 500 ? 'bg-destructive/10 text-destructive border-destructive/20' :
+                                    'bg-primary/10 text-primary border-primary/20'"
+                            x-text="log.status_code">—</span>
+                    </td>
+                    <td class="px-4 py-3 font-mono text-xs text-muted-foreground max-w-[160px] truncate" x-text="log.key_used">—</td>
+                    <td class="px-4 py-3 font-mono text-xs text-muted-foreground">
+                      <span x-text="log.latency_ms < 1000 ? log.latency_ms + 'ms' : (log.latency_ms/1000).toFixed(1) + 's'">—</span>
+                      <span x-show="log.rotated" class="ml-2 inline-flex items-center px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider bg-destructive/10 text-destructive border border-destructive/25 rounded">Rotated</span>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Pagination -->
+          <div class="px-4 py-3 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-3" x-show="logs.total > 0">
+            <div class="text-[11px] text-muted-foreground">
+              Page <span class="font-mono text-foreground font-medium" x-text="logs.page">1</span> of <span class="font-mono text-foreground font-medium" x-text="logs.total_pages">1</span>
+              <span class="ml-2 opacity-60">(<span x-text="logs.total">0</span> total)</span>
+            </div>
+            <div class="flex items-center gap-1.5">
+              <button @click="goToPage(logs.page - 1)" :disabled="logs.page <= 1"
+                      class="p-1.5 rounded-md border border-border text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+                <i data-lucide="chevron-left" class="w-3.5 h-3.5"></i>
+              </button>
+              <template x-for="p in paginationRange" :key="p">
+                <button @click="goToPage(p)"
+                        class="min-w-[28px] h-7 px-2 rounded-md text-xs font-mono transition-all"
+                        :class="p === logs.page ? 'bg-primary text-primary-foreground' : 'border border-border text-muted-foreground hover:bg-secondary hover:text-foreground'"
+                        x-text="p">1</button>
+              </template>
+              <button @click="goToPage(logs.page + 1)" :disabled="logs.page >= logs.total_pages"
+                      class="p-1.5 rounded-md border border-border text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
+                <i data-lucide="chevron-right" class="w-3.5 h-3.5"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== KEYS TAB ===== -->
+      <div x-show="activeTab === 'keys'" class="space-y-6" x-transition:enter="transition ease-out duration-200" x-transition:enter-start="opacity-0 translate-y-2" x-transition:enter-end="opacity-100 translate-y-0">
+
+        <div class="flex items-center gap-2">
+          <i data-lucide="key-round" class="w-4 h-4 text-primary"></i>
+          <h2 class="text-xs font-semibold text-muted-foreground uppercase tracking-[0.12em] font-mono">API Keys</h2>
+          <span class="text-[10px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-full border border-border font-mono"
+                x-text="`${keys.length} keys`">— keys</span>
+        </div>
+
+        <!-- Add key form -->
+        <div class="bg-card border border-border rounded-lg p-4 flex flex-col sm:flex-row gap-3 shadow-sm">
+          <input type="text" x-model="newKey" placeholder="Paste castai_v1_... key here" autocomplete="off" spellcheck="false"
+                 class="flex-1 bg-input border border-border text-foreground rounded-md px-3 py-2 text-sm placeholder:text-muted-foreground/40 focus:outline-none focus:ring-2 focus:ring-ring font-mono">
+          <button @click="addKey()" :disabled="!newKey || addingKey"
+                  class="bg-primary text-primary-foreground font-semibold px-4 py-2 rounded-md text-sm hover:opacity-90 active:opacity-80 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 whitespace-nowrap">
+            <i data-lucide="plus" class="w-4 h-4" x-show="!addingKey"></i>
+            <i data-lucide="loader-2" class="w-4 h-4 animate-spin" x-show="addingKey"></i>
+            <span x-text="addingKey ? 'Adding...' : 'Add Key'">Add Key</span>
+          </button>
+        </div>
+
+        <!-- Keys table -->
+        <div class="bg-card border border-border rounded-lg overflow-hidden shadow-sm">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-border bg-secondary/50">
+                  <th class="text-left px-4 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.12em] font-mono">Masked Key</th>
+                  <th class="text-left px-4 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.12em] font-mono">Status</th>
+                  <th class="text-right px-4 py-3 text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.12em] font-mono">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-if="!keys.length">
+                  <tr>
+                    <td colspan="3" class="px-4 py-12 text-center">
+                      <div class="flex flex-col items-center gap-3 text-muted-foreground">
+                        <i data-lucide="key-round" class="w-10 h-10 opacity-20"></i>
+                        <p class="text-sm font-medium">No keys configured</p>
+                        <p class="text-xs opacity-60">Add API keys above to start proxying</p>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+                <template x-for="k in keys" :key="k.prefix">
+                  <tr class="border-b border-border/50 hover:bg-secondary/30 transition-colors">
+                    <td class="px-4 py-3 font-mono text-xs text-muted-foreground" x-text="k.masked">—</td>
+                    <td class="px-4 py-3">
+                      <span class="inline-flex items-center px-2 py-0.5 rounded text-[10px] font-mono font-medium uppercase tracking-wider border"
+                            :class="k.status === 'Active' ? 'bg-primary/10 text-primary border-primary/20' :
+                                    k.status === 'Standby' ? 'bg-accent/10 text-accent border-accent/20' :
+                                    'bg-destructive/10 text-destructive border-destructive/20'"
+                            x-text="k.status">—</span>
+                    </td>
+                    <td class="px-4 py-3 text-right">
+                      <div class="flex items-center justify-end gap-2">
+                        <button x-show="k.status === 'Limited'" @click="resetKey(k.prefix)"
+                                class="px-3 py-1.5 rounded text-[11px] font-medium border transition-all hover:bg-accent/10 text-accent border-accent/25 hover:border-accent/40">
+                          Reset
+                        </button>
+                        <button @click="removeKey(k.prefix)"
+                                class="px-3 py-1.5 rounded text-[11px] font-medium border transition-all hover:bg-destructive/10 text-destructive border-destructive/25 hover:border-destructive/40">
+                          Remove
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </main>
+
+  <!-- Toast Container -->
+  <div class="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
+    <template x-for="t in toasts" :key="t.id">
+      <div class="toast-enter pointer-events-auto bg-card/95 backdrop-blur border border-border border-l-4 rounded-lg shadow-lg shadow-black/10 px-4 py-3 min-w-[300px] max-w-[420px] flex items-start gap-3"
+           :class="t.type === 'success' ? 'border-l-accent' : t.type === 'error' ? 'border-l-destructive' : 'border-l-primary'">
+        <i :data-lucide="t.type === 'success' ? 'check-circle' : t.type === 'error' ? 'alert-circle' : 'info'"
+           class="w-4 h-4 mt-0.5 shrink-0"
+           :class="t.type === 'success' ? 'text-accent' : t.type === 'error' ? 'text-destructive' : 'text-primary'"></i>
+        <span class="text-sm text-foreground flex-1" x-text="t.message">Message</span>
+      </div>
+    </template>
+  </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+function dashboard() {
+  return {
+    // ── State ──
+    dark: true,
+    sidebarOpen: false,
+    activeTab: 'activity',
+    sseConnected: false,
+    newKey: '',
+    addingKey: false,
+
+    stats: {
+      total_requests: 0,
+      failover_count: 0,
+      active_key_index: 0,
+      total_keys: 0,
+      uptime_seconds: 0,
+      keys: []
+    },
+
+    metrics: [
+      { id: 'reqs', label: 'Total Requests', icon: 'activity', value: '—', sub: 'since last start', spark: [] },
+      { id: 'uptime', label: 'Uptime', icon: 'clock', value: '—', sub: 'server running', spark: [] },
+      { id: 'rotations', label: 'Rotations', icon: 'arrow-left-right', value: '—', sub: 'key rotations', spark: [] },
+      { id: 'active', label: 'Active Key', icon: 'key-round', value: '—', sub: 'current position', spark: [] }
+    ],
+
+    logs: {
+      items: [],
+      page: 1,
+      per_page: 15,
+      total: 0,
+      total_pages: 1,
+      search: '',
+      sort_by: 'created_at',
+      sort_order: 'DESC',
+      loading: true
+    },
+
+    keys: [],
+    toasts: [],
+    sparkHistory: [],
+    _sse: null,
+    _poll: null,
+
+    // ── Lifecycle ──
+    init() {
+      // Theme
+      this.dark = document.documentElement.classList.contains('dark');
+      this.$watch('dark', v => {
+        document.documentElement.classList.toggle('dark', v);
+        localStorage.setItem('theme', v ? 'dark' : 'light');
+      });
+      const saved = localStorage.getItem('theme');
+      if (saved) this.dark = saved === 'dark';
+
+      // Init
+      this.fetchStatus();
+      this.fetchLogs();
+      this.initSSE();
+
+      // Lucide re-render
+      this.$nextTick(() => lucide.createIcons());
+    },
+
+    // ── SSE ──
+    initSSE() {
+      try {
+        const evt = new EventSource('/api/sse');
+        evt.onopen = () => { this.sseConnected = true; console.log('[SSE] Connected'); };
+        evt.onerror = () => { this.sseConnected = false; };
+        evt.onmessage = (e) => {
+          try {
+            const data = JSON.parse(e.data);
+            if (data.type === 'status') this.applyStatus(data.payload);
+            if (data.type === 'log') {
+              this.prependLog(data.payload);
+            }
+          } catch {}
+        };
+        this._sse = evt;
+      } catch {
+        // Fallback to polling
+        this._poll = setInterval(() => { this.fetchStatus(); this.fetchLogs(); }, 2000);
+      }
+    },
+
+    destroy() {
+      if (this._sse) { this._sse.close(); this._sse = null; }
+      if (this._poll) { clearInterval(this._poll); this._poll = null; }
+    },
+
+    // ── Data ──
+    async fetchStatus() {
+      try {
+        const r = await fetch('/api/status');
+        if (!r.ok) { if (r.status === 401) window.location = '/login'; return; }
+        const d = await r.json();
+        this.applyStatus(d);
+      } catch (e) { console.error('status fetch failed', e); }
+    },
+
+    applyStatus(d) {
+      this.stats = d;
+      this.keys = d.keys || [];
+      this.metrics[0].value = this.formatNumber(d.total_requests);
+      this.metrics[0].sub = 'since last start';
+      this.metrics[1].value = this.fmtUptime(d.uptime_seconds);
+      this.metrics[1].sub = 'server running';
+      this.metrics[2].value = d.failover_count;
+      this.metrics[2].sub = 'key rotations';
+      this.metrics[3].value = `#${d.active_key_index + 1}/${d.total_keys}`;
+      this.metrics[3].sub = 'current position';
+
+      // Update sparkline data
+      this.sparkHistory.push(d.total_requests);
+      if (this.sparkHistory.length > 20) this.sparkHistory.shift();
+      this.metrics.forEach(m => m.spark = [...this.sparkHistory]);
+    },
+
+    async fetchLogs() {
+      this.logs.loading = true;
+      try {
+        const params = new URLSearchParams({
+          page: String(this.logs.page),
+          per_page: String(this.logs.per_page),
+          search: this.logs.search,
+          sort_by: this.logs.sort_by,
+          sort_order: String(this.logs.sort_order)
+        });
+        const r = await fetch(`/api/logs?${params}`);
+        if (!r.ok) return;
+        const d = await r.json();
+        this.logs.items = d.logs || [];
+        this.logs.total = d.total || 0;
+        this.logs.total_pages = d.total_pages || 1;
+      } finally { this.logs.loading = false; }
+    },
+
+    prependLog(log) {
+      this.logs.items.unshift(log);
+      if (this.logs.items.length > this.logs.per_page) this.logs.items.pop();
+      this.logs.total = (this.logs.total || 0) + 1;
+    },
+
+    // ── Pagination ──
+    goToPage(p) {
+      if (p < 1 || p > this.logs.total_pages) return;
+      this.logs.page = p;
+      this.fetchLogs();
+    },
+
+    get paginationRange() {
+      const max = this.logs.total_pages, cur = this.logs.page;
+      if (max <= 5) return Array.from({length: max}, (_, i) => i + 1);
+      if (cur <= 3) return [1,2,3,4,5];
+      if (cur >= max - 2) return [max-4,max-3,max-2,max-1,max];
+      return [cur-1, cur, cur+1];
+    },
+
+    sortBy(col) {
+      if (this.logs.sort_by === col) {
+        this.logs.sort_order = this.logs.sort_order === 'DESC' ? 'ASC' : 'DESC';
+      } else {
+        this.logs.sort_by = col;
+        this.logs.sort_order = 'DESC';
+      }
+      this.fetchLogs();
+    },
+
+    // ── Key Actions ──
+    async addKey() {
+      if (!this.newKey.trim()) return;
+      this.addingKey = true;
+      try {
+        const r = await fetch('/api/keys', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key: this.newKey.trim() })
+        });
+        const d = await r.json();
+        if (d.success) { this.newKey = ''; this.toast('API key added', 'success'); this.fetchStatus(); }
+        else { this.toast(d.message || 'Failed to add key', 'error'); }
+      } catch { this.toast('Network error', 'error'); }
+      finally { this.addingKey = false; }
+    },
+
+    async removeKey(prefix) {
+      if (!confirm('Remove this API key permanently?')) return;
+      try {
+        const r = await fetch('/api/keys', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key_prefix: prefix })
+        });
+        const d = await r.json();
+        this.toast(d.success ? 'Key removed' : (d.message || 'Failed'), d.success ? 'success' : 'error');
+        this.fetchStatus();
+      } catch { this.toast('Network error', 'error'); }
+    },
+
+    async resetKey(prefix) {
+      try {
+        const r = await fetch('/api/keys/reset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key_prefix: prefix })
+        });
+        const d = await r.json();
+        this.toast(d.success ? 'Key reset to standby' : (d.message || 'Failed'), d.success ? 'success' : 'error');
+        this.fetchStatus();
+      } catch { this.toast('Network error', 'error'); }
+    },
+
+    // ── Auth ──
+    async logout() {
+      await fetch('/api/logout', { method: 'POST' });
+      window.location.href = '/login';
+    },
+
+    // ── Utilities ──
+    toast(msg, type = 'info') {
+      const id = Date.now() + Math.random();
+      this.toasts.push({ id, msg, type });
+      setTimeout(() => { this.toasts = this.toasts.filter(t => t.id !== id); }, 3500);
+    },
+
+    fmtUptime(s) {
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = Math.floor(s % 60);
+      return `${h}h ${m}m ${sec}s`;
+    },
+
+    formatNumber(n) {
+      return Number(n).toLocaleString();
+    },
+
+    sparkLine(data, w, h) {
+      if (!data.length) return '';
+      const max = Math.max(...data, 1);
+      const min = Math.min(...data);
+      const range = max - min || 1;
+      const step = w / (data.length - 1);
+      let d = `M0,${h - ((data[0] - min) / range) * h}`;
+      for (let i = 1; i < data.length; i++) {
+        d += ` L${i * step},${h - ((data[i] - min) / range) * h}`;
+      }
+      return d;
+    },
+
+    sparkArea(data, w, h) {
+      const line = this.sparkLine(data, w, h);
+      if (!line) return '';
+      return line + ` L${w},${h} L0,${h} Z`;
+    }
+  };
+}
+</script>
+{% endblock %}
