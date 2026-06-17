@@ -75,7 +75,6 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -93,12 +92,12 @@ async def require_auth(session_token: str = Cookie(default=None)):
 
 @app.get("/login", response_class=HTMLResponse)
 async def get_login(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="login.html")
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def get_dashboard(request: Request, user: None = Depends(require_auth)):
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="dashboard.html")
 
 
 # ═══════════════════════════════════════════════════════════════
