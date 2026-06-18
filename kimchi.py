@@ -23,9 +23,13 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 import httpx
 
+# NOTE: total_requests / failover_count are NOT imported here.
+# They are read via config_module.* inside async functions to avoid
+# stale module-level binding (int is immutable → import → by-value copy).
+import config as config_module
 from config import (
     KIMCHI_BASE_URL, get_current_key, rotate_key, API_KEYS, SSL_KEYFILE, SSL_CERTFILE, PORT,
-    START_TIME, total_requests, failover_count, recent_requests, key_statuses,
+    recent_requests, key_statuses,
     add_request_log, add_api_key, remove_api_key, reset_key_status, get_masked_keys,
     SESSION_SECRET, ADMIN_USERNAME, verify_admin_password, init_state_from_db,
     get_paginated_logs,
@@ -130,7 +134,7 @@ async def api_logout():
 
 @app.get("/api/status")
 async def get_status(user: None = Depends(require_auth)):
-    uptime_seconds = int(time.time() - START_TIME)
+    uptime_seconds = int(time.time() - config_module.START_TIME)
     hours = uptime_seconds // 3600
     minutes = (uptime_seconds % 3600) // 60
     seconds = uptime_seconds % 60
@@ -145,8 +149,9 @@ async def get_status(user: None = Depends(require_auth)):
         "status": "online",
         "uptime": uptime_str,
         "uptime_seconds": uptime_seconds,
-        "total_requests": total_requests,
-        "failover_count": failover_count,
+        "total_requests": config_module.total_requests,
+        "failover_count": config_module.failover_count,
+        "total_tokens": config_module.total_tokens,
         "active_key_index": active_idx,
         "total_keys": len(API_KEYS),
         "keys": get_masked_keys(),
@@ -215,8 +220,9 @@ async def _build_status_dict():
     return {
         "status": "online",
         "uptime_seconds": uptime_seconds,
-        "total_requests": total_requests,
-        "failover_count": failover_count,
+        "total_requests": config_module.total_requests,
+        "failover_count": config_module.failover_count,
+        "total_tokens": config_module.total_tokens,
         "active_key_index": active_idx,
         "total_keys": len(API_KEYS),
         "keys": get_masked_keys(),
@@ -257,6 +263,7 @@ async def messages(request: Request):
     model = body.get("model", "kimi-k2.6")
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
     openai_req = build_openai_request(body)
+    input_tokens = estimate_tokens(body)
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "kimchi/0.2.0",
@@ -322,7 +329,7 @@ async def messages(request: Request):
                                 async for chunk in stream_as_anthropic(resp, model, msg_id):
                                     has_yielded = True
                                     yield chunk
-                                add_request_log(model, 200, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000))
+                                add_request_log(model, 200, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000), input_tokens, 0)
                                 # Broadcast log update via SSE
                                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                                 return
