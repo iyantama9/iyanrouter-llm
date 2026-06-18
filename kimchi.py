@@ -210,7 +210,7 @@ async def count_tokens(body: dict = Body(...)):
 # ═══════════════════════════════════════════════════════════════
 
 async def _build_status_dict():
-    uptime_seconds = int(time.time() - START_TIME)
+    uptime_seconds = int(time.time() - config_module.START_TIME)
     current_key = get_current_key()
     active_idx = 0
     try:
@@ -336,6 +336,13 @@ async def messages(request: Request):
                         except Exception as e:
                             print(f"[STREAM ERROR] Exception during attempt {attempt} (key: {current_key[:10]}...): {type(e).__name__}: {str(e)}")
                             import traceback; traceback.print_exc()
+                            
+                            # Check if this is a context window error to trigger auto-compacting rather than key rotation
+                            if is_context_window_error(str(e)) and c_idx < len(compact_levels) - 1:
+                                print(f"[LOG] Context window exceeded (parsed from stream exception), triggering auto-compacting...")
+                                context_window_hit = True
+                                break
+
                             if has_yielded or attempt == len(API_KEYS) - 1:
                                 add_request_log(model, 500, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000))
                                 if not has_yielded:
@@ -404,11 +411,22 @@ async def messages(request: Request):
                         break
                     add_request_log(model, resp.status_code, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000))
                     return JSONResponse(status_code=resp.status_code, content=err_json)
-                add_request_log(model, 200, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000))
+                # Extract output tokens from upstream response
+                resp_json = resp.json()
+                usage = resp_json.get("usage", {}) if isinstance(resp_json, dict) else {}
+                output_tokens = usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0
+                add_request_log(model, 200, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000), input_tokens, output_tokens)
                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
-                return JSONResponse(to_anthropic_response(resp.json(), model, msg_id))
+                return JSONResponse(to_anthropic_response(resp_json, model, msg_id))
             except Exception as e:
                 print(f"[LOG] Request attempt {attempt} with key {current_key[:10]}... failed: {type(e).__name__}: {str(e)}")
+                
+                # Check if this is a context window error to trigger auto-compacting rather than key rotation
+                if is_context_window_error(str(e)) and c_idx < len(compact_levels) - 1:
+                    print(f"[LOG] Context window exceeded (parsed from non-stream exception), triggering auto-compacting...")
+                    context_window_hit = True
+                    break
+
                 if attempt == len(API_KEYS) - 1:
                     import traceback
                     traceback.print_exc()

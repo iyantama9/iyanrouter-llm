@@ -157,7 +157,7 @@ def to_anthropic_response(openai_resp, model, msg_id):
     if content_str:
         import re
         # Try matching complete tag first
-        match = re.search(r'<(thinking|thought)>(.*?)</\1>(.*)', content_str, re.DOTALL)
+        match = re.search(r'<(thinking|thought|thinking_process)\b[^>]*>(.*?)</\1>(.*)', content_str, re.DOTALL | re.IGNORECASE)
         if match:
             extracted_reasoning = match.group(2).strip()
             remaining_text = match.group(3).strip()
@@ -167,7 +167,7 @@ def to_anthropic_response(openai_resp, model, msg_id):
                 content.append({"type": "text", "text": remaining_text})
         else:
             # Fallback for unclosed tag
-            match_open = re.search(r'<(thinking|thought)>(.*)', content_str, re.DOTALL)
+            match_open = re.search(r'<(thinking|thought|thinking_process)\b[^>]*>(.*)', content_str, re.DOTALL | re.IGNORECASE)
             if match_open:
                 extracted_reasoning = match_open.group(2).strip()
                 if extracted_reasoning:
@@ -289,14 +289,12 @@ async def stream_as_anthropic(openai_stream, model, msg_id):
             text_buffer += text
             while True:
                 if not in_text_thinking:
-                    # Look for opening tags
-                    idx_thinking = text_buffer.find("<thinking>")
-                    idx_thought = text_buffer.find("<thought>")
-                    
-                    indices = [i for i in (idx_thinking, idx_thought) if i != -1]
-                    if indices:
-                        i = min(indices)
-                        tag_len = len("<thinking>") if i == idx_thinking else len("<thought>")
+                    # Look for opening tags case-insensitively with regex
+                    import re
+                    match_open = re.search(r'<(thinking|thought|thinking_process)\b[^>]*>', text_buffer, re.IGNORECASE)
+                    if match_open:
+                        i = match_open.start()
+                        tag_len = len(match_open.group(0))
                         
                         # Send text before the tag
                         pre_text = text_buffer[:i]
@@ -322,10 +320,10 @@ async def stream_as_anthropic(openai_stream, model, msg_id):
                         in_text_thinking = True
                         text_buffer = text_buffer[i + tag_len:]
                     else:
-                        # No complete tag found. Send safe text (all except last 15 chars)
-                        if len(text_buffer) > 15:
-                            safe_send = text_buffer[:-15]
-                            text_buffer = text_buffer[-15:]
+                        # No complete tag found. Send safe text (all except last 20 chars to be safe with longer tags)
+                        if len(text_buffer) > 20:
+                            safe_send = text_buffer[:-20]
+                            text_buffer = text_buffer[-20:]
                             if reasoning_opened and not reasoning_closed:
                                 yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
                                 reasoning_closed = True
@@ -337,14 +335,12 @@ async def stream_as_anthropic(openai_stream, model, msg_id):
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_idx, 'delta': {'type': 'text_delta', 'text': safe_send}})}\n\n"
                         break
                 else:
-                    # Look for closing tags
-                    idx_thinking = text_buffer.find("</thinking>")
-                    idx_thought = text_buffer.find("</thought>")
-                    
-                    indices = [i for i in (idx_thinking, idx_thought) if i != -1]
-                    if indices:
-                        i = min(indices)
-                        tag_len = len("</thinking>") if i == idx_thinking else len("</thought>")
+                    # Look for closing tags case-insensitively with regex
+                    import re
+                    match_close = re.search(r'</(thinking|thought|thinking_process)\b[^>]*>', text_buffer, re.IGNORECASE)
+                    if match_close:
+                        i = match_close.start()
+                        tag_len = len(match_close.group(0))
                         
                         # Send reasoning before the tag
                         pre_reasoning = text_buffer[:i]
@@ -357,10 +353,10 @@ async def stream_as_anthropic(openai_stream, model, msg_id):
                         in_text_thinking = False
                         text_buffer = text_buffer[i + tag_len:]
                     else:
-                        # No complete tag found. Send safe reasoning (all except last 15 chars)
-                        if len(text_buffer) > 15:
-                            safe_send = text_buffer[:-15]
-                            text_buffer = text_buffer[-15:]
+                        # No complete tag found. Send safe reasoning (all except last 20 chars)
+                        if len(text_buffer) > 20:
+                            safe_send = text_buffer[:-20]
+                            text_buffer = text_buffer[-20:]
                             yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': reasoning_block_idx, 'delta': {'type': 'thinking_delta', 'thinking': safe_send}})}\n\n"
                         break
 
