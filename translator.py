@@ -99,15 +99,34 @@ def to_openai_messages(body):
 
 import config
 
+_ROUTER_BEHAVIOR = """\
+<router_behavior>
+You are an AI coding assistant. Apply these rules based on context:
+
+THINKING: For complex tasks (multi-step implementation, debugging, architecture, analysis) — reason inside <thinking>…</thinking> before answering. For simple or conversational requests — skip it.
+
+TASK STRUCTURE: When implementing, fixing, or refactoring across multiple steps or files, label each unit of work:
+**Task 1 — [title]**
+[work]
+**Task 2 — [title]**
+[work]
+End with a **Summary** of all changes made.
+
+FORMAT: Always use fenced code blocks with language identifiers. Never truncate code — always complete every function and file. Use clear headers for long responses.
+</router_behavior>
+
+"""
+
+
 def build_openai_request(body, provider="kc"):
     claude_model = body.get("model", "")
-    
+
     if provider in ("bm", "cv"):
         openai_model = claude_model
     else:
         fallback = config.KIMCHI_MODELS[-1] if config.KIMCHI_MODELS else ""
         model_str = claude_model.lower()
-        
+
         if "sonnet" in model_str:
             openai_model = config.KIMCHI_MODELS[-1] if len(config.KIMCHI_MODELS) >= 1 else fallback
         elif "haiku" in model_str:
@@ -117,10 +136,17 @@ def build_openai_request(body, provider="kc"):
         else:
             openai_model = claude_model if claude_model in config.KIMCHI_MODELS else fallback
 
+    messages = to_openai_messages(body)
+
+    if config.AUGMENT_SYSTEM_PROMPT:
+        if messages and messages[0]["role"] == "system":
+            messages[0]["content"] = _ROUTER_BEHAVIOR + messages[0]["content"]
+        else:
+            messages.insert(0, {"role": "system", "content": _ROUTER_BEHAVIOR.strip()})
 
     req = {
         "model": openai_model,
-        "messages": to_openai_messages(body),
+        "messages": messages,
         "stream": body.get("stream", False),
     }
     if "max_tokens" in body:

@@ -35,6 +35,7 @@ DEFAULT_UPSTREAM_URL = DEFAULT_UPSTREAM_URL_RAW.rstrip("/")
 CAVOTI_BASE_URL = os.getenv("CAVOTI_BASE_URL", "https://sg.cavoti.com/v1").rstrip("/")
 BLUESMINDS_BASE_URL = os.getenv("BLUESMINDS_BASE_URL", "https://api.bluesminds.com/v1").rstrip("/")
 SHOW_REASONING = os.getenv("SHOW_REASONING", "true").lower() == "true"
+AUGMENT_SYSTEM_PROMPT = os.getenv("AUGMENT_SYSTEM_PROMPT", "true").lower() == "true"
 
 if not PORT_STR:
     raise ValueError("PORT environment variable is not set")
