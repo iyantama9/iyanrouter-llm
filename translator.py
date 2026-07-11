@@ -416,7 +416,7 @@ async def stream_anthropic_filter(anthropic_stream_iter):
         else:
             yield f"{line}\n\n"
 
-async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0):
+async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0, token_tracker=None):
     tool_calls = {}
     reasoning_opened = False
     reasoning_closed = False
@@ -631,6 +631,8 @@ async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0):
     yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': {'output_tokens': output_tokens}})}\n\n"
 
     yield f"event: message_stop\ndata: {json.dumps({'type': 'message_stop'})}\n\n"
+    if token_tracker is not None:
+        token_tracker["output_tokens"] = output_tokens
 
 
 def compact_messages(messages, keep_last=20):

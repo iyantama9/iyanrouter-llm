@@ -29,8 +29,9 @@ import httpx
 import config as config_module
 from config import (
     DEFAULT_UPSTREAM_URL, CAVOTI_API_KEY, CAVOTI_BASE_URL, BLUESMINDS_API_KEY, BLUESMINDS_BASE_URL, ROUTER_PASSWORD, get_current_key, rotate_key, API_KEYS, SSL_KEYFILE, SSL_CERTFILE, PORT,
-    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, CV_API_KEYS, BM_API_KEYS,
-    get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key,
+    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS,
+    get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key,
+    NARA_BASE_URL,
     recent_requests, key_statuses, ROUTER_DOMAIN,
     add_request_log, add_api_key, remove_api_key, reset_key_status, get_masked_keys, set_active_key,
     SESSION_SECRET, ADMIN_USERNAME, verify_admin_password, init_state_from_db,
@@ -187,12 +188,8 @@ async def get_status(user: None = Depends(require_auth)):
     minutes = (uptime_seconds % 3600) // 60
     seconds = uptime_seconds % 60
     uptime_str = f"{hours}h {minutes}m {seconds}s"
-    current_key = get_current_key()
-    active_idx = 0
-    try:
-        active_idx = API_KEYS.index(current_key)
-    except ValueError:
-        pass
+    _all_keys = get_masked_keys()
+    available_keys = sum(1 for k in _all_keys if k['status'] in ('Active', 'Standby'))
     return {
         "status": "online",
         "uptime": uptime_str,
@@ -200,9 +197,9 @@ async def get_status(user: None = Depends(require_auth)):
         "total_requests": config_module.total_requests,
         "failover_count": config_module.failover_count,
         "total_tokens": config_module.total_tokens,
-        "active_key_index": active_idx,
-        "total_keys": len(API_KEYS) + len(CV_API_KEYS) + len(BM_API_KEYS),
-        "keys": get_masked_keys(),
+        "available_keys": available_keys,
+        "total_keys": len(_all_keys),
+        "keys": _all_keys,
         "recent_requests": recent_requests
     }
 
@@ -225,7 +222,9 @@ async def add_key_endpoint(payload: dict = Body(...), user: None = Depends(requi
     key_type = payload.get("type", "auto")
     
     # Sophisticated Auto-Detect using endpoint probing
-    if key_type == "auto" and key.startswith("sk-"):
+    if key_type == "auto" and key.startswith("sk-nry-"):
+        key_type = "nry"
+    elif key_type == "auto" and key.startswith("sk-"):
         import httpx
         async with httpx.AsyncClient() as client:
             # Check Cavoti
@@ -284,9 +283,9 @@ async def api_set_active_key(payload: dict = Body(...), user: None = Depends(req
 async def api_get_models(user: None = Depends(require_auth)):
     return {
         "kimchi": [f"kc/{m}" for m in KIMCHI_MODELS],
-
         "cavoti": [f"cv/{m}" for m in CAVOTI_MODELS],
         "bluesminds": [f"bm/{m}" for m in BLUESMINDS_MODELS],
+        "bynara": [f"nry/{m}" for m in NARA_MODELS],
     }
 
 
@@ -389,21 +388,17 @@ async def count_tokens(body: dict = Body(...)):
 
 async def _build_status_dict():
     uptime_seconds = int(time.time() - config_module.START_TIME)
-    current_key = get_current_key()
-    active_idx = 0
-    try:
-        active_idx = API_KEYS.index(current_key)
-    except ValueError:
-        pass
+    _all_keys = get_masked_keys()
+    available_keys = sum(1 for k in _all_keys if k['status'] in ('Active', 'Standby'))
     return {
         "status": "online",
         "uptime_seconds": uptime_seconds,
         "total_requests": config_module.total_requests,
         "failover_count": config_module.failover_count,
         "total_tokens": config_module.total_tokens,
-        "active_key_index": active_idx,
-        "total_keys": len(API_KEYS),
-        "keys": get_masked_keys(),
+        "available_keys": available_keys,
+        "total_keys": len(_all_keys),
+        "keys": _all_keys,
         "recent_requests": recent_requests
     }
 
@@ -453,7 +448,11 @@ async def list_models(request: Request):
     # Add Cavoti models with cv/ prefix
     for m in CAVOTI_MODELS:
         models.append(f"cv/{m}")
-    
+
+    # Add byNara models with nry/ prefix
+    for m in NARA_MODELS:
+        models.append(f"nry/{m}")
+
     data = []
     for m in models:
         data.append({
@@ -484,13 +483,15 @@ async def messages(request: Request):
             provider = "cv"
         elif payload["model"].startswith("bm/") or payload["model"] in BLUESMINDS_MODELS:
             provider = "bm"
+        elif payload["model"].startswith("nry/") or payload["model"] in NARA_MODELS:
+            provider = "nry"
         elif payload["model"].startswith("kc/") or payload["model"] in KIMCHI_MODELS:
             provider = "kc"
             
     # Clean model prefix
-    for prefix in ("kc/", "cv/", "bm/"):
+    for prefix in ("kc/", "cv/", "bm/", "nry/"):
         if payload.get("model", "").startswith(prefix):
-            payload["model"] = payload["model"][3:]
+            payload["model"] = payload["model"][len(prefix):]
             break
 
     if provider == "cv":
@@ -499,6 +500,9 @@ async def messages(request: Request):
     elif provider == "bm":
         upstream_base_url = BLUESMINDS_BASE_URL
         log_model = f"bm/{payload['model']}"
+    elif provider == "nry":
+        upstream_base_url = NARA_BASE_URL
+        log_model = f"nry/{payload['model']}"
     else:
         upstream_base_url = DEFAULT_UPSTREAM_URL
         log_model = f"kc/{payload['model']}"
@@ -521,6 +525,8 @@ async def messages(request: Request):
         api_keys_to_use = CV_API_KEYS
     elif provider == "bm":
         api_keys_to_use = BM_API_KEYS
+    elif provider == "nry":
+        api_keys_to_use = NR_API_KEYS
     else:
         api_keys_to_use = API_KEYS
         
@@ -551,6 +557,8 @@ async def messages(request: Request):
                         current_key = get_current_cv_key()
                     elif provider == "bm":
                         current_key = get_current_bm_key()
+                    elif provider == "nry":
+                        current_key = get_current_nr_key()
                     else:
                         current_key = get_current_key()
                         
@@ -590,13 +598,15 @@ async def messages(request: Request):
                                     add_request_log(log_model, resp.status_code, current_key, True, int((time.time() - start_req_time) * 1000))
                                     if provider == "kc":
                                         rotate_key()
-
                                     elif provider == "cv":
                                         rotate_cv_key()
                                     elif provider == "bm":
                                         rotate_bm_key()
+                                    elif provider == "nry":
+                                        rotate_nr_key()
                                     last_error_status = resp.status_code
                                     last_error_content = err_data or {"error": f"HTTP {resp.status_code} error"}
+                                    await sse_broadcaster.broadcast("status", await _build_status_dict())
                                     continue
 
                                 if resp.status_code != 200:
@@ -614,14 +624,15 @@ async def messages(request: Request):
                                     yield f"event: error\ndata: {json.dumps(to_anthropic_stream_error(err_data))}\n\n"
                                     return
 
-                                async for chunk in stream_as_anthropic(resp, log_model, msg_id, input_tokens):
+                                token_tracker = {"output_tokens": 0}
+                                async for chunk in stream_as_anthropic(resp, log_model, msg_id, input_tokens, token_tracker):
                                     has_yielded = True
                                     if first_token_time is None:
                                         first_token_time = time.time()
                                     yield chunk
                                 total_ms = int((time.time() - start_req_time) * 1000)
                                 ttft_ms = int((first_token_time - start_req_time) * 1000) if first_token_time else total_ms
-                                add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, 0)
+                                add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, token_tracker["output_tokens"])
                                 # Proactive slow-key rotation
                                 threshold = config_module.SLOW_RESPONSE_THRESHOLD_MS
                                 if threshold > 0 and ttft_ms > threshold and len(api_keys_to_use) > 1:
@@ -632,8 +643,10 @@ async def messages(request: Request):
                                         rotate_cv_key(reason="Slow")
                                     elif provider == "bm":
                                         rotate_bm_key(reason="Slow")
-                                    await sse_broadcaster.broadcast("status", await _build_status_dict())
+                                    elif provider == "nry":
+                                        rotate_nr_key(reason="Slow")
                                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
+                                await sse_broadcaster.broadcast("status", await _build_status_dict())
                                 return
                         except Exception as e:
                             print(f"[STREAM ERROR] Exception during attempt {attempt} (key: {current_key[:10]}...): {type(e).__name__}: {str(e)}")
@@ -661,13 +674,15 @@ async def messages(request: Request):
                             add_request_log(log_model, 500, current_key, True, int((time.time() - start_req_time) * 1000))
                             if provider == "kc":
                                 rotate_key()
-
                             elif provider == "cv":
                                 rotate_cv_key()
                             elif provider == "bm":
                                 rotate_bm_key()
+                            elif provider == "nry":
+                                rotate_nr_key()
                             last_error_status = 500
                             last_error_content = {"error": str(e)}
+                            await sse_broadcaster.broadcast("status", await _build_status_dict())
 
                 if context_window_hit:
                     continue
@@ -698,9 +713,11 @@ async def messages(request: Request):
                 current_key = get_current_cv_key()
             elif provider == "bm":
                 current_key = get_current_bm_key()
+            elif provider == "nry":
+                current_key = get_current_nr_key()
             else:
                 current_key = get_current_key()
-                
+
             headers["Authorization"] = f"Bearer {current_key}"
             for h in ("x-api-key", "anthropic-version"):
                 headers.pop(h, None)
@@ -734,13 +751,15 @@ async def messages(request: Request):
                     add_request_log(log_model, resp.status_code, current_key, True, int((time.time() - start_req_time) * 1000))
                     if provider == "kc":
                         rotate_key()
-
                     elif provider == "cv":
                         rotate_cv_key()
                     elif provider == "bm":
                         rotate_bm_key()
+                    elif provider == "nry":
+                        rotate_nr_key()
                     last_error_status = resp.status_code
                     last_error_content = err_json or {"error": resp.text}
+                    await sse_broadcaster.broadcast("status", await _build_status_dict())
                     continue
                 if resp.status_code != 200:
                     try:
@@ -771,8 +790,10 @@ async def messages(request: Request):
                         rotate_cv_key(reason="Slow")
                     elif provider == "bm":
                         rotate_bm_key(reason="Slow")
-                    await sse_broadcaster.broadcast("status", await _build_status_dict())
+                    elif provider == "nry":
+                        rotate_nr_key(reason="Slow")
                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
+                await sse_broadcaster.broadcast("status", await _build_status_dict())
                 return JSONResponse(anthropic_resp)
             except Exception as e:
                 print(f"[LOG] Request attempt {attempt} with key {current_key[:10]}... failed: {type(e).__name__}: {str(e)}")
@@ -800,13 +821,15 @@ async def messages(request: Request):
                 add_request_log(log_model, 500, current_key, True, int((time.time() - start_req_time) * 1000))
                 if provider == "kc":
                     rotate_key()
-
                 elif provider == "cv":
                     rotate_cv_key()
                 elif provider == "bm":
                     rotate_bm_key()
+                elif provider == "nry":
+                    rotate_nr_key()
                 last_error_status = 500
                 last_error_content = {"error": str(e)}
+                await sse_broadcaster.broadcast("status", await _build_status_dict())
 
         if context_window_hit:
             continue

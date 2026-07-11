@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Iyan Router{% endblock %}</title>
 
-  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -17,8 +16,6 @@
             foreground: 'hsl(var(--foreground))',
             card: 'hsl(var(--card))',
             'card-foreground': 'hsl(var(--card-foreground))',
-            popover: 'hsl(var(--popover))',
-            'popover-foreground': 'hsl(var(--popover-foreground))',
             primary: 'hsl(var(--primary))',
             'primary-foreground': 'hsl(var(--primary-foreground))',
             secondary: 'hsl(var(--secondary))',
@@ -34,8 +31,8 @@
             ring: 'hsl(var(--ring))',
           },
           fontFamily: {
-            display: ['"Playfair Display"', 'serif'],
-            body: ['"DM Sans"', 'sans-serif'],
+            display: ['"Syne"', 'sans-serif'],
+            body: ['"Outfit"', 'sans-serif'],
             mono: ['"JetBrains Mono"', 'monospace'],
           },
           borderRadius: {
@@ -48,73 +45,94 @@
     }
   </script>
 
-  <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Syne:wght@600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 
-  <!-- Alpine.js -->
   <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-
-  <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@latest"></script>
 
   <style>
-    /* ── shadcn + Neo-Kinpaku CSS Variables ── */
     :root {
-      /* Light mode - warm ivory base */
-      --background: 42 33% 97%;
-      --foreground: 25 15% 12%;
-      --card: 42 30% 95%;
-      --card-foreground: 25 15% 12%;
-      --popover: 42 33% 97%;
-      --popover-foreground: 25 15% 12%;
-      --primary: 38 65% 48%;
-      --primary-foreground: 42 33% 97%;
-      --secondary: 42 15% 91%;
-      --secondary-foreground: 25 15% 12%;
-      --muted: 42 15% 91%;
-      --muted-foreground: 25 10% 45%;
-      --accent: 165 45% 35%;
-      --accent-foreground: 42 33% 97%;
-      --destructive: 0 55% 50%;
+      --background: 0 0% 98%;
+      --foreground: 0 0% 8%;
+      --card: 0 0% 100%;
+      --card-foreground: 0 0% 8%;
+      --primary: 17 85% 55%;
+      --primary-foreground: 0 0% 100%;
+      --secondary: 0 0% 93%;
+      --secondary-foreground: 0 0% 8%;
+      --muted: 0 0% 93%;
+      --muted-foreground: 0 0% 44%;
+      --accent: 158 50% 38%;
+      --accent-foreground: 0 0% 100%;
+      --destructive: 0 72% 51%;
       --destructive-foreground: 0 0% 100%;
-      --border: 35 12% 85%;
-      --input: 35 12% 85%;
-      --ring: 38 65% 48%;
-      --radius: 0.5rem;
+      --border: 0 0% 88%;
+      --input: 0 0% 88%;
+      --ring: 17 85% 55%;
+      --radius: 0.875rem;
     }
 
     .dark {
-      /* Dark mode - lacquer ground */
-      --background: 25 15% 6%;
-      --foreground: 42 20% 92%;
-      --card: 25 14% 9%;
-      --card-foreground: 42 20% 92%;
-      --popover: 25 15% 6%;
-      --popover-foreground: 42 20% 92%;
-      --primary: 42 60% 58%;
-      --primary-foreground: 25 15% 6%;
-      --secondary: 25 10% 14%;
-      --secondary-foreground: 42 20% 92%;
-      --muted: 25 10% 14%;
-      --muted-foreground: 35 10% 55%;
-      --accent: 165 40% 42%;
-      --accent-foreground: 42 33% 97%;
-      --destructive: 0 50% 55%;
+      --background: 0 0% 8%;
+      --foreground: 0 0% 92%;
+      --card: 0 0% 7%;
+      --card-foreground: 0 0% 92%;
+      --primary: 17 85% 55%;
+      --primary-foreground: 0 0% 4%;
+      --secondary: 0 0% 11%;
+      --secondary-foreground: 0 0% 92%;
+      --muted: 0 0% 11%;
+      --muted-foreground: 0 0% 42%;
+      --accent: 158 50% 38%;
+      --accent-foreground: 0 0% 4%;
+      --destructive: 0 72% 51%;
       --destructive-foreground: 0 0% 100%;
-      --border: 25 10% 16%;
-      --input: 25 10% 16%;
-      --ring: 42 60% 58%;
+      --border: 0 0% 15%;
+      --input: 0 0% 11%;
+      --ring: 17 85% 55%;
     }
 
-    /* ── Scrollbar ── */
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: hsl(var(--background)); }
-    ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 3px; }
+    /* Animatable CSS custom properties for glow position */
+    @property --glow-x {
+      syntax: '<percentage>';
+      initial-value: 25%;
+      inherits: false;
+    }
+    @property --glow-y {
+      syntax: '<percentage>';
+      initial-value: 20%;
+      inherits: false;
+    }
+
+    /* Square grid + animated orange glow */
+    body, .grid-bg {
+      background-image:
+        radial-gradient(ellipse 70% 60% at var(--glow-x) var(--glow-y), rgba(232,112,64,0.14) 0%, transparent 65%),
+        linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px);
+      background-size: auto, 32px 32px, 32px 32px;
+      animation: glow-drift 25s ease-in-out infinite;
+    }
+
+    @keyframes glow-drift {
+      0%   { --glow-x: 25%; --glow-y: 20%; }
+      25%  { --glow-x: 78%; --glow-y: 12%; }
+      50%  { --glow-x: 65%; --glow-y: 72%; }
+      75%  { --glow-x: 12%; --glow-y: 58%; }
+      100% { --glow-x: 25%; --glow-y: 20%; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body, .grid-bg { animation: none; }
+    }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 4px; }
     ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
 
-    /* ── Animations ── */
     @keyframes shimmer {
       0% { background-position: 200% 0; }
       100% { background-position: -200% 0; }
@@ -144,22 +162,6 @@
       animation: pulse-dot 2s ease-out infinite;
     }
 
-    /* ── Kinpaku gold accent seam ── */
-    .gold-seam {
-      position: relative;
-    }
-    .gold-seam::before {
-      content: '';
-      position: absolute; top: 0; left: 0; right: 0; height: 2px;
-      background: linear-gradient(90deg, transparent, hsl(42 60% 58%), transparent);
-      opacity: 0.6;
-      transition: opacity 0.3s;
-    }
-    .gold-seam:hover::before {
-      opacity: 1;
-    }
-
-    /* ── Reduced motion ── */
     @media (prefers-reduced-motion: reduce) {
       .animate-shimmer { animation: none; background: hsl(var(--secondary)); }
       .pulse-ring::after { animation: none; }

@@ -16,15 +16,19 @@ if not DEFAULT_UPSTREAM_URL_RAW:
 KIMCHI_MODELS_RAW = os.getenv("KIMCHI_MODELS", "")
 CAVOTI_MODELS_RAW = os.getenv("CAVOTI_MODELS", "")
 BLUESMINDS_MODELS_RAW = os.getenv("BLUESMINDS_MODELS", "")
+NARA_MODELS_RAW = os.getenv("NARA_MODELS", "")
 
 KIMCHI_MODELS = [m.strip() for m in KIMCHI_MODELS_RAW.split(",") if m.strip()]
 CAVOTI_MODELS = [m.strip() for m in CAVOTI_MODELS_RAW.split(",") if m.strip()]
 BLUESMINDS_MODELS = [m.strip() for m in BLUESMINDS_MODELS_RAW.split(",") if m.strip()]
+NARA_MODELS = [m.strip() for m in NARA_MODELS_RAW.split(",") if m.strip()]
 
 ROUTER_DOMAIN = os.getenv("ROUTER_DOMAIN", "localhost")
 
 CAVOTI_API_KEY = os.getenv("CAVOTI_API_KEY")
 BLUESMINDS_API_KEY = os.getenv("BLUESMINDS_API_KEY")
+NARA_API_KEYS_RAW = os.getenv("NARA_API_KEYS", "")
+NARA_API_KEYS_ENV = [k.strip() for k in NARA_API_KEYS_RAW.split(",") if k.strip()]
 
 ROUTER_PASSWORD = os.getenv("ROUTER_PASSWORD")
 PORT_STR = os.getenv("PORT")
@@ -34,6 +38,7 @@ SSL_CERTFILE = os.getenv("SSL_CERTFILE")
 DEFAULT_UPSTREAM_URL = DEFAULT_UPSTREAM_URL_RAW.rstrip("/")
 CAVOTI_BASE_URL = os.getenv("CAVOTI_BASE_URL", "https://sg.cavoti.com/v1").rstrip("/")
 BLUESMINDS_BASE_URL = os.getenv("BLUESMINDS_BASE_URL", "https://api.bluesminds.com/v1").rstrip("/")
+NARA_BASE_URL = os.getenv("NARA_BASE_URL", "https://router.bynara.id/v1").rstrip("/")
 SHOW_REASONING = os.getenv("SHOW_REASONING", "true").lower() == "true"
 AUGMENT_SYSTEM_PROMPT = os.getenv("AUGMENT_SYSTEM_PROMPT", "true").lower() == "true"
 # Rotate key proactively if time-to-first-token exceeds this (ms). 0 = disabled.
@@ -68,6 +73,7 @@ SESSION_SECRET = hashlib.sha256(f"{ADMIN_USERNAME}:{os.getenv('ADMIN_PASSWORD', 
 API_KEYS = []
 CV_API_KEYS = []
 BM_API_KEYS = []
+NR_API_KEYS = []
 key_statuses = {}
 key_limited_at: dict[str, float] = {}  # key_value -> time.time() when marked Limited
 total_requests = 0
@@ -78,6 +84,7 @@ START_TIME = time.time()
 current_key_index = 0
 current_cv_key_index = 0
 current_bm_key_index = 0
+current_nr_key_index = 0
 
 
 def _bg(coro):
@@ -88,11 +95,12 @@ def _bg(coro):
 
 
 async def init_state_from_db():
-    global API_KEYS, CV_API_KEYS, BM_API_KEYS, key_statuses, total_requests, failover_count, current_key_index, current_cv_key_index, current_bm_key_index, START_TIME
+    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, key_statuses, total_requests, failover_count, current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, START_TIME
 
     API_KEYS.clear()
     CV_API_KEYS.clear()
     BM_API_KEYS.clear()
+    NR_API_KEYS.clear()
     key_statuses.clear()
 
     # Load keys from DB
@@ -101,10 +109,16 @@ async def init_state_from_db():
         for r in rows:
             val = r["key_value"]
             provider = r.get("provider", "kc")
+            # Auto-correct mis-classified nry keys (sk-nry- prefix stored as 'kc')
+            if provider != "nry" and val.startswith("sk-nry-"):
+                provider = "nry"
+                _bg(db_execute("UPDATE api_keys SET provider='nry' WHERE key_value=$1", val))
             if provider == "cv":
                 CV_API_KEYS.append(val)
             elif provider == "bm":
                 BM_API_KEYS.append(val)
+            elif provider == "nry":
+                NR_API_KEYS.append(val)
             else:
                 API_KEYS.append(val)
             key_statuses[val] = r["status"]
@@ -149,6 +163,17 @@ async def init_state_from_db():
             bm_key, prefix, key_statuses[bm_key]
         )
 
+    # Seed byNara keys from env if not already present
+    for nr_key in NARA_API_KEYS_ENV:
+        if nr_key not in NR_API_KEYS:
+            NR_API_KEYS.append(nr_key)
+            key_statuses[nr_key] = "Standby"
+            prefix = nr_key[:15] + "..." if len(nr_key) > 15 else nr_key
+            await db_execute(
+                "INSERT INTO api_keys (key_value, key_prefix, status, provider) VALUES ($1, $2, $3, 'nry') ON CONFLICT (key_value) DO UPDATE SET provider='nry'",
+                nr_key, prefix, "Standby"
+            )
+
     # Fix active key index
     for i, k in enumerate(API_KEYS):
         if key_statuses.get(k) == "Active":
@@ -187,6 +212,19 @@ async def init_state_from_db():
             await db_execute(
                 "UPDATE api_keys SET status = 'Active' WHERE key_value = $1",
                 BM_API_KEYS[0]
+            )
+
+    for i, k in enumerate(NR_API_KEYS):
+        if key_statuses.get(k) == "Active":
+            current_nr_key_index = i
+            break
+    else:
+        if NR_API_KEYS:
+            current_nr_key_index = 0
+            key_statuses[NR_API_KEYS[0]] = "Active"
+            await db_execute(
+                "UPDATE api_keys SET status = 'Active' WHERE key_value = $1",
+                NR_API_KEYS[0]
             )
 
     # Load stats from DB
@@ -333,6 +371,31 @@ def rotate_bm_key(reason: str = "Limited"):
     return new_key
 
 
+def get_current_nr_key():
+    if not NR_API_KEYS:
+        return ""
+    return NR_API_KEYS[current_nr_key_index]
+
+
+def rotate_nr_key(reason: str = "Limited"):
+    global current_nr_key_index, failover_count
+    if len(NR_API_KEYS) <= 1:
+        return get_current_nr_key()
+    old_key = get_current_nr_key()
+    key_statuses[old_key] = reason
+    if reason == "Limited":
+        key_limited_at[old_key] = time.time()
+    current_nr_key_index = (current_nr_key_index + 1) % len(NR_API_KEYS)
+    new_key = get_current_nr_key()
+    key_statuses[new_key] = "Active"
+    failover_count += 1
+    print(f"[LOG] Rotated nry key → index {current_nr_key_index}: {new_key[:15]}... (reason: {reason})")
+    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
+    _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
+    _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
+    return new_key
+
+
 def add_request_log(model, status_code, key_used, rotated, latency_ms, input_tokens: int = 0, output_tokens: int = 0):
     global total_requests, total_tokens
     total_requests += 1
@@ -379,7 +442,9 @@ def add_api_key(new_key: str, key_type: str = "auto"):
     elif key_type == "bm":
         BM_API_KEYS.append(new_key)
         provider = "bm"
-
+    elif key_type == "nry":
+        NR_API_KEYS.append(new_key)
+        provider = "nry"
     else:
         API_KEYS.append(new_key)
         provider = "kc"
@@ -398,7 +463,7 @@ def add_api_key(new_key: str, key_type: str = "auto"):
 
 
 def remove_api_key(key_prefix: str):
-    global API_KEYS, CV_API_KEYS, current_key_index, current_cv_key_index
+    global API_KEYS, CV_API_KEYS, NR_API_KEYS, current_key_index, current_cv_key_index, current_nr_key_index
     target_key = None
     target_list = None
     
@@ -421,6 +486,13 @@ def remove_api_key(key_prefix: str):
             if key.startswith(key_prefix):
                 target_key = key
                 target_list = BM_API_KEYS
+                break
+
+    if not target_key:
+        for key in NR_API_KEYS:
+            if key.startswith(key_prefix):
+                target_key = key
+                target_list = NR_API_KEYS
                 break
 
     if not target_key:
@@ -448,7 +520,7 @@ def remove_api_key(key_prefix: str):
             current_cv_key_index = CV_API_KEYS.index(get_current_cv_key()) if get_current_cv_key() in CV_API_KEYS else 0
         except Exception:
             current_cv_key_index = 0
-    else:
+    elif target_list == BM_API_KEYS:
         active_key = get_current_bm_key()
         if target_key == active_key:
             rotate_bm_key()
@@ -457,6 +529,15 @@ def remove_api_key(key_prefix: str):
             current_bm_key_index = BM_API_KEYS.index(get_current_bm_key()) if get_current_bm_key() in BM_API_KEYS else 0
         except Exception:
             current_bm_key_index = 0
+    else:
+        active_key = get_current_nr_key()
+        if target_key == active_key:
+            rotate_nr_key()
+        NR_API_KEYS.remove(target_key)
+        try:
+            current_nr_key_index = NR_API_KEYS.index(get_current_nr_key()) if get_current_nr_key() in NR_API_KEYS else 0
+        except Exception:
+            current_nr_key_index = 0
 
     if target_key in key_statuses:
         del key_statuses[target_key]
@@ -469,7 +550,7 @@ def remove_api_key(key_prefix: str):
 
 
 def reset_key_status(key_prefix: str):
-    for key in API_KEYS + CV_API_KEYS + BM_API_KEYS:
+    for key in API_KEYS + CV_API_KEYS + BM_API_KEYS + NR_API_KEYS:
         if key.startswith(key_prefix):
             key_statuses[key] = "Standby"
             _bg(db_execute("UPDATE api_keys SET status = 'Standby' WHERE key_value = $1", key))
@@ -483,12 +564,12 @@ def set_active_key(key_prefix: str, provider: str = None):
     target_list = None
 
     if provider == "kc": target_list = API_KEYS
-
     elif provider == "cv": target_list = CV_API_KEYS
     elif provider == "bm": target_list = BM_API_KEYS
+    elif provider == "nry": target_list = NR_API_KEYS
     else:
         # Auto detect list if provider not explicitly passed
-        for lst in [API_KEYS, CV_API_KEYS, BM_API_KEYS]:
+        for lst in [API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS]:
             for k in lst:
                 if k.startswith(key_prefix):
                     target_key = k
@@ -520,16 +601,16 @@ def set_active_key(key_prefix: str, provider: str = None):
     # Update index
     idx = target_list.index(target_key)
     if target_list == API_KEYS: current_key_index = idx
-
     elif target_list == CV_API_KEYS: current_cv_key_index = idx
     elif target_list == BM_API_KEYS: current_bm_key_index = idx
+    elif target_list == NR_API_KEYS: current_nr_key_index = idx
     
     return True, "Key set as Active"
 
 
 def get_masked_keys():
     result = []
-    for idx, key in enumerate(API_KEYS + CV_API_KEYS + BM_API_KEYS):
+    for idx, key in enumerate(API_KEYS + CV_API_KEYS + BM_API_KEYS + NR_API_KEYS):
         status = key_statuses.get(key, "Standby")
         masked = key[:15] + "..." if len(key) > 15 else key
         result.append({
@@ -539,7 +620,8 @@ def get_masked_keys():
             "status": status,
             "is_kc": key in API_KEYS,
             "is_cv": key in CV_API_KEYS,
-            "is_bm": key in BM_API_KEYS
+            "is_bm": key in BM_API_KEYS,
+            "is_nr": key in NR_API_KEYS
         })
     return result
 
