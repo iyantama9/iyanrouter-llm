@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import bcrypt
 from dotenv import load_dotenv
-from database import execute as db_execute, fetch as db_fetch, fetchrow as db_fetchrow
+from app.database import execute as db_execute, fetch as db_fetch, fetchrow as db_fetchrow
 
 load_dotenv()
 

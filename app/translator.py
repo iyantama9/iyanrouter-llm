@@ -1,6 +1,6 @@
 import json
 import uuid
-from config import SHOW_REASONING
+from app.config import SHOW_REASONING
 
 def flatten_content(content):
     if not isinstance(content, list):
@@ -97,7 +97,7 @@ def to_openai_messages(body):
 
     return messages
 
-import config
+import app.config as config
 
 _ROUTER_BEHAVIOR = """\
 <router_behavior>

@@ -1,0 +1,116 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#   "fastapi",
+#   "httpx",
+#   "uvicorn",
+#   "python-dotenv",
+#   "asyncpg",
+#   "jinja2",
+#   "bcrypt",
+# ]
+# ///
+
+import asyncio
+import os
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
+
+from app.database import init_db, close_db
+from app.config import init_state_from_db, auto_reset_limited_keys, PORT, SSL_KEYFILE, SSL_CERTFILE, ROUTER_DOMAIN
+from app.sse import sse_broadcaster
+from app.routers import admin, playground, proxy
+
+
+async def _build_status_dict():
+    import time
+    from app.config import get_masked_keys, total_requests, failover_count, total_tokens, START_TIME, recent_requests
+    uptime_seconds = int(time.time() - START_TIME)
+    _all_keys = get_masked_keys()
+    available_keys = sum(1 for k in _all_keys if k['status'] in ('Active', 'Standby'))
+    return {
+        "status": "online",
+        "uptime_seconds": uptime_seconds,
+        "total_requests": total_requests,
+        "failover_count": failover_count,
+        "total_tokens": total_tokens,
+        "available_keys": available_keys,
+        "total_keys": len(_all_keys),
+        "keys": _all_keys,
+        "recent_requests": recent_requests
+    }
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await init_db()
+    await init_state_from_db()
+    print("[INIT] Database connected and state loaded")
+
+    async def _auto_reset_loop():
+        while True:
+            await asyncio.sleep(60)
+            try:
+                reset = await auto_reset_limited_keys()
+                if reset:
+                    await sse_broadcaster.broadcast("status", await _build_status_dict())
+            except Exception as e:
+                print(f"[AUTO-RESET] Error: {e}")
+
+    asyncio.create_task(_auto_reset_loop())
+    yield
+    await close_db()
+    print("[INIT] Database connection closed")
+
+
+app = FastAPI(lifespan=lifespan)
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+app.include_router(admin.router)
+app.include_router(playground.router)
+app.include_router(proxy.router)
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    if PORT == 443:
+        import http.server
+        import socketserver
+        import threading
+
+        class RedirectHandler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                host = self.headers.get('Host', ROUTER_DOMAIN)
+                self.send_response(301)
+                self.send_header('Location', f'https://{host}{self.path}')
+                self.end_headers()
+
+            def do_POST(self):
+                self.do_GET()
+
+            def do_HEAD(self):
+                self.do_GET()
+
+            def log_message(self, format, *args):
+                pass
+
+        def start_redirect_server():
+            try:
+                class ThreadedTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+                    allow_reuse_address = True
+                server = ThreadedTCPServer(("0.0.0.0", 80), RedirectHandler)
+                print("[LOG] Starting HTTP-to-HTTPS redirect server on port 80...")
+                server.serve_forever()
+            except Exception as e:
+                print(f"[ERROR] Failed to start redirect server on port 80: {e}")
+
+        threading.Thread(target=start_redirect_server, daemon=True).start()
+
+    if os.path.exists(SSL_KEYFILE) and os.path.exists(SSL_CERTFILE):
+        uvicorn.run(app, host="0.0.0.0", port=PORT, ssl_keyfile=SSL_KEYFILE, ssl_certfile=SSL_CERTFILE)
+    else:
+        uvicorn.run(app, host="0.0.0.0", port=PORT)
