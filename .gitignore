@@ -4,5 +4,15 @@ venv/
 .vscode/
 __pycache__/
 *.pyc
+
+# Local AI/IDE configuration
+.claude/
+.claude-plugin/
+.kiro/
+.mcp.json
+.opencode.json
+settings.json
+settings.local.json
+
 # Added by code-review-graph
 .code-review-graph/
