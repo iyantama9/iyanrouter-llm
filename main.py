@@ -69,6 +69,27 @@ class SSEBroadcaster:
 
 sse_broadcaster = SSEBroadcaster()
 
+# Simple in-memory login rate limiter: {ip: [timestamp, ...]}
+_login_attempts: dict[str, list[float]] = {}
+_LOGIN_MAX_ATTEMPTS = 10
+_LOGIN_WINDOW_SECONDS = 60
+
+
+def _check_login_rate_limit(ip: str) -> bool:
+    """Returns True if allowed, False if rate limited."""
+    now = time.time()
+    attempts = _login_attempts.get(ip, [])
+    attempts = [t for t in attempts if now - t < _LOGIN_WINDOW_SECONDS]
+    _login_attempts[ip] = attempts
+    return len(attempts) < _LOGIN_MAX_ATTEMPTS
+
+
+def _record_login_attempt(ip: str):
+    now = time.time()
+    attempts = _login_attempts.get(ip, [])
+    attempts.append(now)
+    _login_attempts[ip] = attempts
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -120,16 +141,20 @@ async def get_dashboard(request: Request, session_token: str = Cookie(default=No
 # ═══════════════════════════════════════════════════════════════
 
 @app.post("/api/login")
-async def api_login(payload: dict = Body(...)):
+async def api_login(request: Request, payload: dict = Body(...)):
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_login_rate_limit(client_ip):
+        return JSONResponse(status_code=429, content={"success": False, "message": "Too many login attempts. Try again later."})
     username = payload.get("username", "")
     password = payload.get("password", "")
     if username == ADMIN_USERNAME and verify_admin_password(password):
         return JSONResponse(
             content={"success": True},
             headers={
-                "Set-Cookie": f"session_token={SESSION_SECRET}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000"
+                "Set-Cookie": f"session_token={SESSION_SECRET}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=2592000"
             }
         )
+    _record_login_attempt(client_ip)
     return JSONResponse(status_code=401, content={"success": False, "message": "Invalid credentials"})
 
 
@@ -190,7 +215,7 @@ async def add_key_endpoint(payload: dict = Body(...), user: None = Depends(requi
     # Sophisticated Auto-Detect using endpoint probing
     if key_type == "auto" and key.startswith("sk-"):
         import httpx
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient() as client:
             # Check Cavoti
             try:
                 r = await client.get(f"{CAVOTI_BASE_URL}/models", headers={"Authorization": f"Bearer {key}"}, timeout=3.0)
@@ -649,14 +674,10 @@ async def messages(request: Request):
             else:
                 current_key = get_current_key()
                 
-            if provider in ("cv", "bm"):
-                headers["x-api-key"] = current_key
-                headers["anthropic-version"] = "2023-06-01"
-                if "Authorization" in headers:
-                    del headers["Authorization"]
-            else:
-                headers["Authorization"] = f"Bearer {current_key}"
-                
+            headers["Authorization"] = f"Bearer {current_key}"
+            for h in ("x-api-key", "anthropic-version"):
+                headers.pop(h, None)
+
             start_req_time = time.time()
             try:
                 async with httpx.AsyncClient(timeout=300) as client:
@@ -708,7 +729,7 @@ async def messages(request: Request):
                     return JSONResponse(status_code=resp.status_code, content=err_json)
                 # Extract output tokens from upstream response
                 openai_resp = resp.json()
-                anthropic_resp = to_anthropic_message(openai_resp, upstream_req)
+                anthropic_resp = to_anthropic_response(openai_resp, log_model, msg_id)
                 
                 # Compute token usage if not provided
                 usage = anthropic_resp.get("usage", {})

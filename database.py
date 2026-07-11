@@ -80,11 +80,7 @@ async def setup_tables():
         ADD COLUMN IF NOT EXISTS provider VARCHAR(20) DEFAULT 'kc'
     """)
 
-    # Manually fix known existing Cavoti keys from the user
-    await execute("""
-        UPDATE api_keys SET provider = 'cv' WHERE key_value IN ('sk-FuSN7hE19o550dD7Y9QNYNq3DnSSPoASgRDNceTSR3k4hiCh', 'sk-PWELVxFWEgt32MSb3HD9lla6DQuJexpg48cphQ1BBo9u8Aw8');
-    """)
-    # (sk- keys added as Cavoti will be updated by the new Python logic or manually)
+    # Provider column was added in a prior migration; new keys get provider set at insert time.
     # Add index for performance on pagination/sorting
     await execute("""
         CREATE INDEX IF NOT EXISTS idx_logs_created_at ON request_logs(created_at DESC)
@@ -136,9 +132,3 @@ async def get_chat_messages(session_id: int):
 async def save_chat_message(session_id: int, role: str, content: str):
     await execute("UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1", session_id)
     return await fetchrow("INSERT INTO chat_messages (session_id, role, content) VALUES ($1, $2, $3) RETURNING *", session_id, role, content)
-
-    for k in ("total_requests", "failover_count", "start_time"):
-        await execute("""
-            INSERT INTO server_config (key, value) VALUES ($1, '0')
-            ON CONFLICT (key) DO NOTHING
-        """, k)
