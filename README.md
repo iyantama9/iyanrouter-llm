@@ -1,11 +1,11 @@
 # IyanRouter LLM
 
-A self-hosted LLM routing proxy with a web dashboard. It exposes an Anthropic-compatible API endpoint so tools like Claude Code can talk to multiple upstream providers (Kimchi, OpenModel, Cavoti, BluesMinds) through a single URL, while managing API keys, usage logs, and chat sessions from a browser UI.
+A self-hosted LLM routing proxy with a web dashboard. It exposes an Anthropic-compatible API endpoint so tools like Claude Code can talk to multiple upstream providers (Kimchi, Cavoti, BluesMinds) through a single URL, while managing API keys, usage logs, and chat sessions from a browser UI.
 
 ## Features
 
 - **Anthropic API-compatible proxy** — forwards Claude Code requests to upstream OpenAI-compatible providers and streams responses back.
-- **Multi-provider routing** — supports Kimchi, OpenModel, Cavoti, and BluesMinds with provider-aware key rotation.
+- **Multi-provider routing** — supports Kimchi, Cavoti, and BluesMinds with provider-aware key rotation.
 - **Web dashboard** — Jinja2 + Tailwind admin UI for stats, request logs, API key management, and chat sessions (backed by PostgreSQL).
 - **Key rotation & failover** — automatically rotates and disables exhausted/failing API keys.
 - **Persistent state** — request logs, sessions, messages, and key statuses are stored in PostgreSQL (Neon) and reloaded on startup.
@@ -31,8 +31,7 @@ A self-hosted LLM routing proxy with a web dashboard. It exposes an Anthropic-co
 
    ```env
    DEFAULT_UPSTREAM_URL=https://llm.kimchi.dev/openai/v1
-   OPENMODEL_API_KEY=om-xxxxxxxxxxxxxxxxxxxxxxxxxx
-   OPENMODEL_BASE_URL=https://api.openmodel.ai/v1
+
    PORT=4000
    ADMIN_PASSWORD=your_admin_password
    ROUTER_PASSWORD=your_router_password

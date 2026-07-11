@@ -3,15 +3,10 @@ import uuid
 from config import SHOW_REASONING
 
 def flatten_content(content):
-    if isinstance(content, list):
-        parts = []
-        for part in content:
-            if isinstance(part, dict) and "text" in part:
-                parts.append(part["text"])
-            elif isinstance(part, str):
-                parts.append(part)
-        return "\n".join(filter(None, parts))
-    return content or ""
+    if not isinstance(content, list):
+        return content or ""
+    parts = [p.get("text", "") if isinstance(p, dict) else p for p in content if isinstance(p, (dict, str))]
+    return "\n".join(filter(None, parts))
 
 def convert_tools(anthropic_tools):
     if not anthropic_tools:
@@ -31,6 +26,7 @@ def convert_tools(anthropic_tools):
 def to_openai_messages(body):
     messages = []
     system = body.get("system")
+    
     if system:
         messages.append({"role": "system", "content": flatten_content(system)})
 
@@ -65,7 +61,7 @@ def to_openai_messages(body):
 
         elif role == "user" and isinstance(content, list):
             tool_results = []
-            text_parts = []
+            final_content = []
             for block in content:
                 if not isinstance(block, dict):
                     continue
@@ -75,41 +71,52 @@ def to_openai_messages(body):
                         "tool_call_id": block.get("tool_use_id", ""),
                         "content": flatten_content(block.get("content", "")),
                     })
+                elif block.get("type") == "image":
+                    source = block.get("source", {})
+                    if source.get("type") == "base64":
+                        final_content.append({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:{source.get('media_type', 'image/jpeg')};base64,{source.get('data', '')}"
+                            }
+                        })
                 elif "text" in block and block.get("text"):
-                    text_parts.append(block["text"])
+                    final_content.append({"type": "text", "text": block["text"]})
             if tool_results:
-                if text_parts:
-                    messages.append({"role": "user", "content": " ".join(text_parts)})
                 messages.extend(tool_results)
+                if final_content:
+                    messages.append({"role": "user", "content": final_content})
             else:
-                messages.append({"role": "user", "content": flatten_content(content)})
+                if final_content:
+                    messages.append({"role": "user", "content": final_content})
+                else:
+                    messages.append({"role": "user", "content": flatten_content(content)})
 
         else:
             messages.append({"role": role, "content": flatten_content(content)})
 
     return messages
 
-def build_openai_request(body):
-    claude_model = body.get("model", "kimi-k2.6")
-    if "sonnet" in claude_model:
-        openai_model = "kimi-k2.6"
-    elif "haiku" in claude_model:
-        openai_model = "minimax-m2.7"
-    elif "opus" in claude_model:
-        openai_model = "nemotron-3-ultra-fp4"
-    elif "grok" in claude_model:
-        openai_model = "nemotron-3-ultra-fp4"
+import config
+
+def build_openai_request(body, provider="kc"):
+    claude_model = body.get("model", "")
+    
+    if provider == "bm":
+        openai_model = claude_model
     else:
-        # Check if requested model is a known kimchi model
-        known_kimchi_models = [
-            "minimax-m3", "nemotron-3-super-fp4", "nemotron-3-ultra-fp4",
-            "qwen3-coder-next-fp8", "kimi-k2.5", "minimax-m2.7",
-            "smollm2-135m", "smollm2-360m", "kimi-k2.6", "minimax-m2.5"
-        ]
-        if claude_model in known_kimchi_models:
-            openai_model = claude_model
+        fallback = config.KIMCHI_MODELS[-1] if config.KIMCHI_MODELS else ""
+        model_str = claude_model.lower()
+        
+        if "sonnet" in model_str:
+            openai_model = config.KIMCHI_MODELS[-1] if len(config.KIMCHI_MODELS) >= 1 else fallback
+        elif "haiku" in model_str:
+            openai_model = config.KIMCHI_MODELS[-2] if len(config.KIMCHI_MODELS) >= 2 else fallback
+        elif "opus" in model_str or "grok" in model_str:
+            openai_model = config.KIMCHI_MODELS[1] if len(config.KIMCHI_MODELS) >= 2 else fallback
         else:
-            openai_model = "kimi-k2.6"
+            openai_model = claude_model if claude_model in config.KIMCHI_MODELS else fallback
+
 
     req = {
         "model": openai_model,
@@ -157,8 +164,11 @@ def to_anthropic_response(openai_resp, model, msg_id):
     if content_str:
         import re
         # Try matching complete tag first
-        match = re.search(r'<(thinking|thought|thinking_process)\b[^>]*>(.*?)</\1>(.*)', content_str, re.DOTALL | re.IGNORECASE)
+        match = re.search(r'<(think|thinking|thought|thoughts|thinking_process)\b[^>]*>(.*?)</\1>(.*)', content_str, re.DOTALL | re.IGNORECASE)
         if match:
+            pre_text = content_str[:match.start()]
+            if pre_text:
+                content.append({"type": "text", "text": pre_text})
             extracted_reasoning = match.group(2).strip()
             remaining_text = match.group(3).strip()
             if extracted_reasoning:
@@ -167,8 +177,11 @@ def to_anthropic_response(openai_resp, model, msg_id):
                 content.append({"type": "text", "text": remaining_text})
         else:
             # Fallback for unclosed tag
-            match_open = re.search(r'<(thinking|thought|thinking_process)\b[^>]*>(.*)', content_str, re.DOTALL | re.IGNORECASE)
+            match_open = re.search(r'<(think|thinking|thought|thoughts|thinking_process)\b[^>]*>(.*)', content_str, re.DOTALL | re.IGNORECASE)
             if match_open:
+                pre_text = content_str[:match_open.start()]
+                if pre_text:
+                    content.append({"type": "text", "text": pre_text})
                 extracted_reasoning = match_open.group(2).strip()
                 if extracted_reasoning:
                     content.append({"type": "thinking", "thinking": extracted_reasoning})
@@ -202,8 +215,182 @@ def to_anthropic_response(openai_resp, model, msg_id):
         },
     }
 
+def filter_anthropic_response(anthropic_resp, model):
+    import re
+    content = []
+    for block in anthropic_resp.get("content", []):
+        if block.get("type") == "text":
+            text = block.get("text", "")
+            match = re.search(r'<(think|thinking|thought|thoughts|thinking_process)\b[^>]*>(.*?)</\1>(.*)', text, re.DOTALL | re.IGNORECASE)
+            if match:
+                pre_text = text[:match.start()]
+                if pre_text:
+                    content.append({"type": "text", "text": pre_text})
+                extracted = match.group(2).strip()
+                if extracted:
+                    content.append({"type": "thinking", "thinking": extracted})
+                remaining = match.group(3).strip()
+                if remaining:
+                    content.append({"type": "text", "text": remaining})
+            else:
+                match_open = re.search(r'<(think|thinking|thought|thoughts|thinking_process)\b[^>]*>(.*)', text, re.DOTALL | re.IGNORECASE)
+                if match_open:
+                    pre_text = text[:match_open.start()]
+                    if pre_text:
+                        content.append({"type": "text", "text": pre_text})
+                    extracted = match_open.group(2).strip()
+                    if extracted:
+                        content.append({"type": "thinking", "thinking": extracted})
+                else:
+                    content.append(block)
+        else:
+            content.append(block)
+    
+    anthropic_resp["content"] = content
+    anthropic_resp["model"] = model
+    return anthropic_resp
 
-async def stream_as_anthropic(openai_stream, model, msg_id):
+async def stream_anthropic_filter(anthropic_stream_iter):
+    import re
+    text_buffer = ""
+    in_text_thinking = False
+    reasoning_opened = False
+    reasoning_closed = False
+    text_opened = False
+    next_block = 0
+    reasoning_block_idx = None
+    text_block_idx = None
+    
+    async for line in anthropic_stream_iter:
+        if isinstance(line, bytes):
+            line = line.decode('utf-8', errors='replace')
+        if not line.startswith("data: "):
+            yield f"{line}\n\n"
+            continue
+            
+        raw = line[6:].strip()
+        if raw == "[DONE]":
+            if len(text_buffer) > 0:
+                if not text_opened:
+                    text_opened = True
+                    text_block_idx = next_block
+                    next_block += 1
+                    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_idx, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+                yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_idx, 'delta': {'type': 'text_delta', 'text': text_buffer}})}\n\n"
+            
+            if reasoning_opened and not reasoning_closed:
+                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
+            if text_opened:
+                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': text_block_idx})}\n\n"
+            yield f"{line}\n\n"
+            continue
+            
+        try:
+            event = json.loads(raw)
+        except Exception:
+            yield f"{line}\n\n"
+            continue
+            
+        evt_type = event.get("type")
+        
+        if evt_type in ("message_start", "message_delta", "message_stop", "ping"):
+            yield f"{line}\n\n"
+        elif evt_type == "content_block_start":
+            block = event.get("content_block", {})
+            if block.get("type") == "text":
+                continue # Skip emitting, we will emit later
+            else:
+                if len(text_buffer) > 0:
+                    if not text_opened:
+                        text_opened = True
+                        text_block_idx = next_block
+                        next_block += 1
+                        yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_idx, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+                    yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_idx, 'delta': {'type': 'text_delta', 'text': text_buffer}})}\n\n"
+                    text_buffer = ""
+                if reasoning_opened and not reasoning_closed:
+                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
+                    reasoning_closed = True
+                if text_opened:
+                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': text_block_idx})}\n\n"
+                    text_opened = False
+                
+                event["index"] = next_block
+                next_block += 1
+                yield f"event: content_block_start\ndata: {json.dumps(event)}\n\n"
+        elif evt_type == "content_block_delta":
+            delta = event.get("delta", {})
+            if delta.get("type") == "text_delta":
+                text = delta.get("text", "")
+                text_buffer += text
+                while True:
+                    if not in_text_thinking:
+                        match_open = re.search(r'<(think|thinking|thought|thoughts|thinking_process)\b[^>]*>', text_buffer, re.IGNORECASE)
+                        if match_open:
+                            i = match_open.start()
+                            tag_len = len(match_open.group(0))
+                            pre_text = text_buffer[:i]
+                            if pre_text:
+                                if reasoning_opened and not reasoning_closed:
+                                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
+                                    reasoning_closed = True
+                                if not text_opened:
+                                    text_opened = True
+                                    text_block_idx = next_block
+                                    next_block += 1
+                                    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_idx, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+                                yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_idx, 'delta': {'type': 'text_delta', 'text': pre_text}})}\n\n"
+                            
+                            if not reasoning_opened or reasoning_closed:
+                                reasoning_opened = True
+                                reasoning_closed = False
+                                reasoning_block_idx = next_block
+                                next_block += 1
+                                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': reasoning_block_idx, 'content_block': {'type': 'thinking', 'thinking': ''}})}\n\n"
+                            
+                            in_text_thinking = True
+                            text_buffer = text_buffer[i + tag_len:]
+                        else:
+                            if len(text_buffer) > 20:
+                                safe_send = text_buffer[:-20]
+                                text_buffer = text_buffer[-20:]
+                                if reasoning_opened and not reasoning_closed:
+                                    yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
+                                    reasoning_closed = True
+                                if not text_opened:
+                                    text_opened = True
+                                    text_block_idx = next_block
+                                    next_block += 1
+                                    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_idx, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
+                                yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_idx, 'delta': {'type': 'text_delta', 'text': safe_send}})}\n\n"
+                            break
+                    else:
+                        match_close = re.search(r'</(think|thinking|thought|thoughts|thinking_process)\b[^>]*>', text_buffer, re.IGNORECASE)
+                        if match_close:
+                            i = match_close.start()
+                            tag_len = len(match_close.group(0))
+                            pre_reasoning = text_buffer[:i]
+                            if pre_reasoning:
+                                yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': reasoning_block_idx, 'delta': {'type': 'thinking_delta', 'thinking': pre_reasoning}})}\n\n"
+                            yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
+                            reasoning_closed = True
+                            in_text_thinking = False
+                            text_buffer = text_buffer[i + tag_len:]
+                        else:
+                            if len(text_buffer) > 20:
+                                safe_send = text_buffer[:-20]
+                                text_buffer = text_buffer[-20:]
+                                yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': reasoning_block_idx, 'delta': {'type': 'thinking_delta', 'thinking': safe_send}})}\n\n"
+                            break
+            else:
+                event["index"] = next_block - 1
+                yield f"event: content_block_delta\ndata: {json.dumps(event)}\n\n"
+        elif evt_type == "content_block_stop":
+            pass
+        else:
+            yield f"{line}\n\n"
+
+async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0):
     tool_calls = {}
     reasoning_opened = False
     reasoning_closed = False
@@ -240,7 +427,7 @@ async def stream_as_anthropic(openai_stream, model, msg_id):
     except StopAsyncIteration:
         pass
 
-    yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'content': [], 'model': model, 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': 0, 'output_tokens': 1}}})}\n\n"
+    yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'content': [], 'model': model, 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': input_tokens, 'output_tokens': 1}}})}\n\n"
     yield f"event: ping\ndata: {json.dumps({'type': 'ping'})}\n\n"
 
     async def get_chunks():
@@ -291,7 +478,7 @@ async def stream_as_anthropic(openai_stream, model, msg_id):
                 if not in_text_thinking:
                     # Look for opening tags case-insensitively with regex
                     import re
-                    match_open = re.search(r'<(thinking|thought|thinking_process)\b[^>]*>', text_buffer, re.IGNORECASE)
+                    match_open = re.search(r'<(think|thinking|thought|thoughts|thinking_process)\b[^>]*>', text_buffer, re.IGNORECASE)
                     if match_open:
                         i = match_open.start()
                         tag_len = len(match_open.group(0))
@@ -337,7 +524,7 @@ async def stream_as_anthropic(openai_stream, model, msg_id):
                 else:
                     # Look for closing tags case-insensitively with regex
                     import re
-                    match_close = re.search(r'</(thinking|thought|thinking_process)\b[^>]*>', text_buffer, re.IGNORECASE)
+                    match_close = re.search(r'</(think|thinking|thought|thoughts|thinking_process)\b[^>]*>', text_buffer, re.IGNORECASE)
                     if match_close:
                         i = match_close.start()
                         tag_len = len(match_close.group(0))
@@ -440,6 +627,7 @@ def compact_messages(messages, keep_last=20):
     if not safe_points:
         # No user messages found, simple truncation from end
         kept = conversation[-keep_last:]
+        cut_point = len(conversation) - keep_last
     else:
         # Find nearest safe point that keeps ~keep_last messages
         target_start = len(conversation) - keep_last
@@ -449,6 +637,44 @@ def compact_messages(messages, keep_last=20):
                 cut_point = sp
                 break
         kept = conversation[cut_point:]
+
+    # Clean up orphaned tool messages to ensure every 'tool' message in the kept slice
+    # has its corresponding 'assistant' message containing the tool call.
+    while True:
+        orphaned_found = False
+        active_tool_call_ids = set()
+        for m in kept:
+            if m.get("role") == "assistant" and "tool_calls" in m:
+                for tc in m["tool_calls"]:
+                    active_tool_call_ids.add(tc.get("id"))
+
+        for m in kept:
+            if m.get("role") == "tool":
+                tcid = m.get("tool_call_id")
+                if tcid and tcid not in active_tool_call_ids:
+                    # Found an orphaned tool message! Find its assistant caller in the original conversation.
+                    assistant_idx = -1
+                    for idx, conv_m in enumerate(conversation):
+                        if conv_m.get("role") == "assistant" and "tool_calls" in conv_m:
+                            if any(tc.get("id") == tcid for tc in conv_m["tool_calls"]):
+                                assistant_idx = idx
+                                break
+                    
+                    if assistant_idx != -1:
+                        if assistant_idx < cut_point:
+                            # Move the cut point back to include the assistant message
+                            cut_point = assistant_idx
+                            kept = conversation[cut_point:]
+                            orphaned_found = True
+                            break
+                    else:
+                        # If the assistant message doesn't exist at all, remove the orphaned tool message to prevent API crash
+                        kept = [msg for msg in kept if msg.get("tool_call_id") != tcid]
+                        orphaned_found = True
+                        break
+        
+        if not orphaned_found:
+            break
 
     result = system_msgs[:]
     if len(kept) < len(conversation):
@@ -463,7 +689,43 @@ def compact_messages(messages, keep_last=20):
 def is_context_window_error(error_data):
     """Check if an error response is a context window exceeded error."""
     error_str = json.dumps(error_data).lower()
-    return "context length" in error_str or "context_length_exceeded" in error_str or "maximum context" in error_str
+    return (
+        "context length" in error_str or 
+        "context_length_exceeded" in error_str or 
+        "maximum context" in error_str or 
+        "context window" in error_str or
+        "context_window" in error_str or
+        "contextlimit" in error_str or
+        "context limit" in error_str or
+        "length exceeded" in error_str
+    )
+
+def parse_input_tokens_from_error(error_data):
+    """Extract input token count from a context window exceeded error message."""
+    import re
+    error_str = json.dumps(error_data)
+    
+    # Pattern 1: parameter=input_tokens, value=180225
+    match = re.search(r'parameter=input_tokens,\s*value=(\d+)', error_str, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+        
+    # Pattern 2: prompt contains at least 180225 input tokens
+    match = re.search(r'prompt contains at least (\d+) input tokens', error_str, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+        
+    # Pattern 3: 2000 in the messages/prompt
+    match = re.search(r'(\d+)\s+in\s+the\s+(messages|prompt)', error_str, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+        
+    # Pattern 4: input_tokens: 180225
+    match = re.search(r'input_tokens.*?(\d+)', error_str, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+        
+    return None
 
 
 def to_anthropic_stream_error(err_data_or_msg, err_type="api_error"):
