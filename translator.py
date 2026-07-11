@@ -454,6 +454,12 @@ async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0):
             pass
 
     async for chunk in get_chunks():
+        # Some providers (e.g. Cavoti) send a final usage-only chunk with empty choices list
+        if not chunk.get("choices"):
+            usage = chunk.get("usage", {})
+            if usage.get("completion_tokens"):
+                output_tokens = usage["completion_tokens"]
+            continue
         choice = chunk["choices"][0]
         delta = choice.get("delta", {})
         fr = choice.get("finish_reason")
