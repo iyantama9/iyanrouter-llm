@@ -34,7 +34,7 @@ from config import (
     recent_requests, key_statuses, ROUTER_DOMAIN,
     add_request_log, add_api_key, remove_api_key, reset_key_status, get_masked_keys, set_active_key,
     SESSION_SECRET, ADMIN_USERNAME, verify_admin_password, init_state_from_db,
-    get_paginated_logs,
+    get_paginated_logs, auto_reset_limited_keys,
 )
 from translator import build_openai_request, to_anthropic_response, stream_as_anthropic, compact_messages, is_context_window_error, parse_input_tokens_from_error, to_anthropic_stream_error, estimate_tokens
 from database import init_db, close_db, get_chat_sessions, get_chat_session, create_chat_session, update_chat_session, delete_chat_session, get_chat_messages, save_chat_message
@@ -96,6 +96,18 @@ async def lifespan(app: FastAPI):
     await init_db()
     await init_state_from_db()
     print("[INIT] Database connected and state loaded")
+
+    async def _auto_reset_loop():
+        while True:
+            await asyncio.sleep(60)
+            try:
+                reset = await auto_reset_limited_keys()
+                if reset:
+                    await sse_broadcaster.broadcast("status", await _build_status_dict())
+            except Exception as e:
+                print(f"[AUTO-RESET] Error: {e}")
+
+    asyncio.create_task(_auto_reset_loop())
     yield
     await close_db()
     print("[INIT] Database connection closed")

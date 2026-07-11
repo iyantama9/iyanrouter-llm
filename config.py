@@ -38,6 +38,8 @@ SHOW_REASONING = os.getenv("SHOW_REASONING", "true").lower() == "true"
 AUGMENT_SYSTEM_PROMPT = os.getenv("AUGMENT_SYSTEM_PROMPT", "true").lower() == "true"
 # Rotate key proactively if time-to-first-token exceeds this (ms). 0 = disabled.
 SLOW_RESPONSE_THRESHOLD_MS = int(os.getenv("SLOW_RESPONSE_THRESHOLD_MS", "10000"))
+# Minutes before a "Limited" key is automatically reset to "Standby". 0 = disabled.
+LIMIT_COOLDOWN_MINUTES = int(os.getenv("LIMIT_COOLDOWN_MINUTES", "60"))
 
 if not PORT_STR:
     raise ValueError("PORT environment variable is not set")
@@ -67,6 +69,7 @@ API_KEYS = []
 CV_API_KEYS = []
 BM_API_KEYS = []
 key_statuses = {}
+key_limited_at: dict[str, float] = {}  # key_value -> time.time() when marked Limited
 total_requests = 0
 total_tokens = 0
 failover_count = 0
@@ -228,7 +231,31 @@ async def init_state_from_db():
             "latency_ms": r["latency_ms"]
         })
 
+    # Clean slate on startup — reset any previously Limited/Slow keys to Standby
+    for key, status in list(key_statuses.items()):
+        if status in ("Limited", "Slow"):
+            key_statuses[key] = "Standby"
+            await db_execute("UPDATE api_keys SET status = 'Standby' WHERE key_value = $1", key)
+
     print(f"[INIT] Loaded {len(API_KEYS)} keys, {total_requests} total requests, {failover_count} failovers from DB")
+
+
+async def auto_reset_limited_keys():
+    """Reset keys that have been Limited for longer than LIMIT_COOLDOWN_MINUTES."""
+    if LIMIT_COOLDOWN_MINUTES <= 0:
+        return []
+    now = time.time()
+    cooldown_secs = LIMIT_COOLDOWN_MINUTES * 60
+    reset_keys = []
+    for key, limited_at in list(key_limited_at.items()):
+        if now - limited_at >= cooldown_secs and key_statuses.get(key) == "Limited":
+            key_statuses[key] = "Standby"
+            await db_execute("UPDATE api_keys SET status = 'Standby' WHERE key_value = $1", key)
+            del key_limited_at[key]
+            reset_keys.append(key[:15] + "...")
+    if reset_keys:
+        print(f"[AUTO-RESET] Auto-reset {len(reset_keys)} Limited key(s) to Standby: {reset_keys}")
+    return reset_keys
 
 
 def get_current_key():
@@ -243,6 +270,8 @@ def rotate_key(reason: str = "Limited"):
         return get_current_key()
     old_key = get_current_key()
     key_statuses[old_key] = reason
+    if reason == "Limited":
+        key_limited_at[old_key] = time.time()
     current_key_index = (current_key_index + 1) % len(API_KEYS)
     new_key = get_current_key()
     key_statuses[new_key] = "Active"
@@ -266,6 +295,8 @@ def rotate_cv_key(reason: str = "Limited"):
         return get_current_cv_key()
     old_key = get_current_cv_key()
     key_statuses[old_key] = reason
+    if reason == "Limited":
+        key_limited_at[old_key] = time.time()
     current_cv_key_index = (current_cv_key_index + 1) % len(CV_API_KEYS)
     new_key = get_current_cv_key()
     key_statuses[new_key] = "Active"
@@ -289,6 +320,8 @@ def rotate_bm_key(reason: str = "Limited"):
         return get_current_bm_key()
     old_key = get_current_bm_key()
     key_statuses[old_key] = reason
+    if reason == "Limited":
+        key_limited_at[old_key] = time.time()
     current_bm_key_index = (current_bm_key_index + 1) % len(BM_API_KEYS)
     new_key = get_current_bm_key()
     key_statuses[new_key] = "Active"
