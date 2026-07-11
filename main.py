@@ -548,6 +548,7 @@ async def messages(request: Request):
                     async with httpx.AsyncClient(timeout=300) as client:
                         try:
                             has_yielded = False
+                            first_token_time = None
                             async with client.stream(
                                 "POST",
                                 upstream_endpoint,
@@ -603,9 +604,23 @@ async def messages(request: Request):
 
                                 async for chunk in stream_as_anthropic(resp, log_model, msg_id, input_tokens):
                                     has_yielded = True
+                                    if first_token_time is None:
+                                        first_token_time = time.time()
                                     yield chunk
-                                add_request_log(log_model, 200, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000), input_tokens, 0)
-                                # Broadcast log update via SSE
+                                total_ms = int((time.time() - start_req_time) * 1000)
+                                ttft_ms = int((first_token_time - start_req_time) * 1000) if first_token_time else total_ms
+                                add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, 0)
+                                # Proactive slow-key rotation
+                                threshold = config_module.SLOW_RESPONSE_THRESHOLD_MS
+                                if threshold > 0 and ttft_ms > threshold and len(api_keys_to_use) > 1:
+                                    print(f"[LOG] Slow TTFT {ttft_ms}ms > {threshold}ms, rotating {provider} key proactively")
+                                    if provider == "kc":
+                                        rotate_key(reason="Slow")
+                                    elif provider == "cv":
+                                        rotate_cv_key(reason="Slow")
+                                    elif provider == "bm":
+                                        rotate_bm_key(reason="Slow")
+                                    await sse_broadcaster.broadcast("status", await _build_status_dict())
                                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                                 return
                         except Exception as e:
@@ -730,11 +745,21 @@ async def messages(request: Request):
                 # Extract output tokens from upstream response
                 openai_resp = resp.json()
                 anthropic_resp = to_anthropic_response(openai_resp, log_model, msg_id)
-                
-                # Compute token usage if not provided
                 usage = anthropic_resp.get("usage", {})
                 output_tokens = usage.get("output_tokens", 0)
-                add_request_log(log_model, 200, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000), input_tokens, output_tokens)
+                total_ms = int((time.time() - start_req_time) * 1000)
+                add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, output_tokens)
+                # Proactive slow-key rotation
+                threshold = config_module.SLOW_RESPONSE_THRESHOLD_MS
+                if threshold > 0 and total_ms > threshold and len(api_keys_to_use) > 1:
+                    print(f"[LOG] Slow response {total_ms}ms > {threshold}ms, rotating {provider} key proactively")
+                    if provider == "kc":
+                        rotate_key(reason="Slow")
+                    elif provider == "cv":
+                        rotate_cv_key(reason="Slow")
+                    elif provider == "bm":
+                        rotate_bm_key(reason="Slow")
+                    await sse_broadcaster.broadcast("status", await _build_status_dict())
                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                 return JSONResponse(anthropic_resp)
             except Exception as e:

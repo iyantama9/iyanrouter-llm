@@ -36,6 +36,8 @@ CAVOTI_BASE_URL = os.getenv("CAVOTI_BASE_URL", "https://sg.cavoti.com/v1").rstri
 BLUESMINDS_BASE_URL = os.getenv("BLUESMINDS_BASE_URL", "https://api.bluesminds.com/v1").rstrip("/")
 SHOW_REASONING = os.getenv("SHOW_REASONING", "true").lower() == "true"
 AUGMENT_SYSTEM_PROMPT = os.getenv("AUGMENT_SYSTEM_PROMPT", "true").lower() == "true"
+# Rotate key proactively if time-to-first-token exceeds this (ms). 0 = disabled.
+SLOW_RESPONSE_THRESHOLD_MS = int(os.getenv("SLOW_RESPONSE_THRESHOLD_MS", "10000"))
 
 if not PORT_STR:
     raise ValueError("PORT environment variable is not set")
@@ -235,19 +237,18 @@ def get_current_key():
     return API_KEYS[current_key_index]
 
 
-def rotate_key():
+def rotate_key(reason: str = "Limited"):
     global current_key_index, failover_count
     if len(API_KEYS) <= 1:
         return get_current_key()
     old_key = get_current_key()
-    key_statuses[old_key] = "Limited"
+    key_statuses[old_key] = reason
     current_key_index = (current_key_index + 1) % len(API_KEYS)
     new_key = get_current_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
-    print(f"[LOG] Rotated to key index {current_key_index}: {new_key[:15]}...")
-    # Save to DB
-    _bg(db_execute("UPDATE api_keys SET status = 'Limited' WHERE key_value = $1", old_key))
+    print(f"[LOG] Rotated kc key → index {current_key_index}: {new_key[:15]}... (reason: {reason})")
+    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
@@ -259,18 +260,18 @@ def get_current_cv_key():
     return CV_API_KEYS[current_cv_key_index]
 
 
-def rotate_cv_key():
+def rotate_cv_key(reason: str = "Limited"):
     global current_cv_key_index, failover_count
     if len(CV_API_KEYS) <= 1:
         return get_current_cv_key()
     old_key = get_current_cv_key()
-    key_statuses[old_key] = "Limited"
+    key_statuses[old_key] = reason
     current_cv_key_index = (current_cv_key_index + 1) % len(CV_API_KEYS)
     new_key = get_current_cv_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
-    print(f"[LOG] Rotated CV key to index {current_cv_key_index}: {new_key[:15]}...")
-    _bg(db_execute("UPDATE api_keys SET status = 'Limited' WHERE key_value = $1", old_key))
+    print(f"[LOG] Rotated cv key → index {current_cv_key_index}: {new_key[:15]}... (reason: {reason})")
+    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
@@ -282,18 +283,18 @@ def get_current_bm_key():
     return BM_API_KEYS[current_bm_key_index]
 
 
-def rotate_bm_key():
+def rotate_bm_key(reason: str = "Limited"):
     global current_bm_key_index, failover_count
     if len(BM_API_KEYS) <= 1:
         return get_current_bm_key()
     old_key = get_current_bm_key()
-    key_statuses[old_key] = "Limited"
+    key_statuses[old_key] = reason
     current_bm_key_index = (current_bm_key_index + 1) % len(BM_API_KEYS)
     new_key = get_current_bm_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
-    print(f"[LOG] Rotated BM key to index {current_bm_key_index}: {new_key[:15]}...")
-    _bg(db_execute("UPDATE api_keys SET status = 'Limited' WHERE key_value = $1", old_key))
+    print(f"[LOG] Rotated bm key → index {current_bm_key_index}: {new_key[:15]}... (reason: {reason})")
+    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
