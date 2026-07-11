@@ -402,7 +402,8 @@ async def sse_endpoint(request: Request, user: None = Depends(require_auth)):
 @app.get("/models")
 async def list_models(request: Request):
     auth_header = request.headers.get("Authorization")
-    if ROUTER_PASSWORD and auth_header != f"Bearer {ROUTER_PASSWORD}":
+    x_api_key = request.headers.get("x-api-key")
+    if ROUTER_PASSWORD and auth_header != f"Bearer {ROUTER_PASSWORD}" and x_api_key != ROUTER_PASSWORD:
         return JSONResponse(status_code=401, content={"error": {"message": "Invalid router password."}})
         
     models = []
@@ -435,7 +436,8 @@ async def list_models(request: Request):
 @app.post("/v1/messages")
 async def messages(request: Request):
     auth_header = request.headers.get("Authorization")
-    if ROUTER_PASSWORD and auth_header != f"Bearer {ROUTER_PASSWORD}":
+    x_api_key = request.headers.get("x-api-key")
+    if ROUTER_PASSWORD and auth_header != f"Bearer {ROUTER_PASSWORD}" and x_api_key != ROUTER_PASSWORD:
         return JSONResponse(status_code=401, content={"error": {"message": "Invalid router password."}})
         
     payload = await request.json()
