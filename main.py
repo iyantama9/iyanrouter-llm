@@ -465,12 +465,8 @@ async def messages(request: Request):
         log_model = f"kc/{payload['model']}"
         
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
-    if provider in ("cv", "bm"):
-        upstream_req = payload.copy()
-        upstream_endpoint = f"{upstream_base_url}/messages"
-    else:
-        upstream_req = build_openai_request(payload, provider=provider)
-        upstream_endpoint = f"{upstream_base_url}/chat/completions"
+    upstream_req = build_openai_request(payload, provider=provider)
+    upstream_endpoint = f"{upstream_base_url}/chat/completions"
         
     input_tokens = estimate_tokens(payload)
     headers = {
@@ -519,13 +515,7 @@ async def messages(request: Request):
                     else:
                         current_key = get_current_key()
                         
-                    if provider == "cv":
-                        headers["x-api-key"] = current_key
-                        headers["anthropic-version"] = "2023-06-01"
-                        if "Authorization" in headers:
-                            del headers["Authorization"]
-                    else:
-                        headers["Authorization"] = f"Bearer {current_key}"
+                    headers["Authorization"] = f"Bearer {current_key}"
                         
                     start_req_time = time.time()
                     async with httpx.AsyncClient(timeout=300) as client:
@@ -584,15 +574,9 @@ async def messages(request: Request):
                                     yield f"event: error\ndata: {json.dumps(to_anthropic_stream_error(err_data))}\n\n"
                                     return
 
-                                if provider == "cv":
-                                    from translator import stream_anthropic_filter
-                                    async for chunk in stream_anthropic_filter(resp.aiter_lines()):
-                                        has_yielded = True
-                                        yield chunk
-                                else:
-                                    async for chunk in stream_as_anthropic(resp, log_model, msg_id, input_tokens):
-                                        has_yielded = True
-                                        yield chunk
+                                async for chunk in stream_as_anthropic(resp, log_model, msg_id, input_tokens):
+                                    has_yielded = True
+                                    yield chunk
                                 add_request_log(log_model, 200, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000), input_tokens, 0)
                                 # Broadcast log update via SSE
                                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
@@ -721,16 +705,15 @@ async def messages(request: Request):
                     add_request_log(log_model, resp.status_code, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000))
                     return JSONResponse(status_code=resp.status_code, content=err_json)
                 # Extract output tokens from upstream response
-                resp_json = resp.json()
-                usage = resp_json.get("usage", {}) if isinstance(resp_json, dict) else {}
-                output_tokens = usage.get("completion_tokens", usage.get("output_tokens", 0)) if isinstance(usage, dict) else 0
+                openai_resp = resp.json()
+                anthropic_resp = to_anthropic_message(openai_resp, upstream_req)
+                
+                # Compute token usage if not provided
+                usage = anthropic_resp.get("usage", {})
+                output_tokens = usage.get("output_tokens", 0)
                 add_request_log(log_model, 200, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000), input_tokens, output_tokens)
                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
-                if provider == "cv":
-                    from translator import filter_anthropic_response
-                    return JSONResponse(filter_anthropic_response(resp_json, log_model))
-                else:
-                    return JSONResponse(to_anthropic_response(resp_json, log_model, msg_id))
+                return JSONResponse(anthropic_resp)
             except Exception as e:
                 print(f"[LOG] Request attempt {attempt} with key {current_key[:10]}... failed: {type(e).__name__}: {str(e)}")
                 
