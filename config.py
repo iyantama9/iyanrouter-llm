@@ -502,6 +502,7 @@ def get_masked_keys():
             "masked": masked,
             "prefix": key[:15],
             "status": status,
+            "is_kc": key in API_KEYS,
             "is_cv": key in CV_API_KEYS,
             "is_bm": key in BM_API_KEYS
         })
