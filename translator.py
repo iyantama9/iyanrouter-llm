@@ -102,7 +102,7 @@ import config
 def build_openai_request(body, provider="kc"):
     claude_model = body.get("model", "")
     
-    if provider == "bm":
+    if provider in ("bm", "cv"):
         openai_model = claude_model
     else:
         fallback = config.KIMCHI_MODELS[-1] if config.KIMCHI_MODELS else ""
