@@ -178,6 +178,7 @@ async def messages(request: Request):
     if upstream_req.get("stream"):
         async def generate():
             nonlocal requested_qc_model
+            nonlocal log_model
             last_error_status = 429
             last_error_content = {"error": {"message": "All configured API keys are rate limited or unauthorized."}}
 
