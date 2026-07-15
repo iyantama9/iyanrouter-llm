@@ -118,10 +118,58 @@ FORMAT: Always use fenced code blocks with language identifiers. Never truncate 
 """
 
 
+def normalize_for_qwen(messages):
+    """Normalize messages for Qwen Cloud API compatibility.
+
+    Qwen Cloud has stricter content format requirements:
+    - User messages must have string content (no arrays)
+    - Tool messages must have string content
+    - Assistant messages with tool_calls must have string or null content
+    - Images should be converted to placeholder text
+    """
+    normalized = []
+    for msg in messages:
+        role = msg.get("role")
+        content = msg.get("content")
+
+        # Flatten user message arrays to strings
+        if role == "user" and isinstance(content, list):
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif block.get("type") == "image_url":
+                        img_url = block.get("image_url", {}).get("url", "")
+                        if img_url.startswith("data:"):
+                            text_parts.append("[Image attached - base64 data]")
+                        else:
+                            text_parts.append(f"[Image: {img_url}]")
+            msg["content"] = "\n".join(filter(None, text_parts)) or "[No text content]"
+
+        # Flatten tool message content to strings
+        elif role == "tool" and isinstance(content, list):
+            text_parts = [block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text"]
+            msg["content"] = "\n".join(filter(None, text_parts)) or "[Tool result]"
+
+        # Ensure assistant messages with tool_calls have proper content
+        elif role == "assistant":
+            if isinstance(content, list):
+                text_parts = [block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") == "text"]
+                msg["content"] = "\n".join(filter(None, text_parts)) or None
+            # If assistant has tool_calls but no content, set to None (OpenAI spec)
+            if "tool_calls" in msg and not msg.get("content"):
+                msg["content"] = None
+
+        normalized.append(msg)
+
+    return normalized
+
+
 def build_openai_request(body, provider="kc"):
     claude_model = body.get("model", "")
 
-    if provider in ("bm", "cv"):
+    if provider in ("bm", "cv", "dahl", "nry", "qc"):
         openai_model = claude_model
     else:
         fallback = config.KIMCHI_MODELS[-1] if config.KIMCHI_MODELS else ""
@@ -137,6 +185,10 @@ def build_openai_request(body, provider="kc"):
             openai_model = claude_model if claude_model in config.KIMCHI_MODELS else fallback
 
     messages = to_openai_messages(body)
+
+    # Qwen Cloud requires simplified content format
+    if provider == "qc":
+        messages = normalize_for_qwen(messages)
 
     if config.AUGMENT_SYSTEM_PROMPT:
         if messages and messages[0]["role"] == "system":

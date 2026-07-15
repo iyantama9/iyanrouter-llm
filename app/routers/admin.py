@@ -9,8 +9,8 @@ import httpx
 
 import app.config as config_module
 from app.config import (
-    CAVOTI_BASE_URL, BLUESMINDS_BASE_URL, ROUTER_PASSWORD,
-    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS,
+    CAVOTI_BASE_URL, BLUESMINDS_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL, ROUTER_PASSWORD,
+    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS_SHORT, QWEN_CLOUD_MODELS,
     recent_requests,
     add_api_key, remove_api_key, reset_key_status, get_masked_keys, set_active_key,
     SESSION_SECRET, ADMIN_USERNAME, verify_admin_password, get_paginated_logs,
@@ -140,6 +140,8 @@ async def add_key_endpoint(payload: dict = Body(...), user: None = Depends(requi
 
     if key_type == "auto" and key.startswith("sk-nry-"):
         key_type = "nry"
+    elif key_type == "auto" and key.startswith("dahl_"):
+        key_type = "dahl"
     elif key_type == "auto" and key.startswith("sk-"):
         async with httpx.AsyncClient() as client:
             try:
@@ -154,6 +156,22 @@ async def add_key_endpoint(payload: dict = Body(...), user: None = Depends(requi
                     r = await client.get(f"{BLUESMINDS_BASE_URL}/models", headers={"Authorization": f"Bearer {key}"}, timeout=3.0)
                     if r.status_code == 200:
                         key_type = "bm"
+                except Exception:
+                    pass
+
+            if key_type == "auto":
+                try:
+                    r = await client.get(f"{DAHL_BASE_URL}/models", headers={"Authorization": f"Bearer {key}"}, timeout=3.0)
+                    if r.status_code == 200:
+                        key_type = "dahl"
+                except Exception:
+                    pass
+
+            if key_type == "auto":
+                try:
+                    r = await client.get(f"{QWEN_CLOUD_BASE_URL}/models", headers={"Authorization": f"Bearer {key}"}, timeout=3.0)
+                    if r.status_code == 200:
+                        key_type = "qc"
                 except Exception:
                     pass
 
@@ -198,6 +216,8 @@ async def api_get_models(user: None = Depends(require_auth)):
         "cavoti": [f"cv/{m}" for m in CAVOTI_MODELS],
         "bluesminds": [f"bm/{m}" for m in BLUESMINDS_MODELS],
         "bynara": [f"nry/{m}" for m in NARA_MODELS],
+        "dahl": [f"dh/{m}" for m in DAHL_MODELS_SHORT],
+        "qwen_cloud": [f"qc/{m}" for m in QWEN_CLOUD_MODELS],
     }
 
 

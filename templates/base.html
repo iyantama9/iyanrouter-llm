@@ -106,22 +106,33 @@
       inherits: false;
     }
 
-    /* Square grid + animated orange glow */
+    /* Plus/cross grid + animated glowing spotlight */
     body, .grid-bg {
       background-image:
-        radial-gradient(ellipse 70% 60% at var(--glow-x) var(--glow-y), rgba(232,112,64,0.14) 0%, transparent 65%),
-        linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px);
-      background-size: auto, 32px 32px, 32px 32px;
-      animation: glow-drift 25s ease-in-out infinite;
+        radial-gradient(ellipse 85% 70% at var(--glow-x) var(--glow-y), rgba(232,112,64,0.28) 0%, rgba(232,112,64,0.08) 35%, transparent 70%),
+        linear-gradient(currentColor 1.2px, transparent 1.2px),
+        linear-gradient(90deg, currentColor 1.2px, transparent 1.2px);
+      background-size: auto, 52px 52px, 52px 52px;
+      background-position: 0 0, 26px 26px, 26px 26px;
+      color: rgba(255,255,255,0.32);
+      animation: glow-drift 20s ease-in-out infinite;
+    }
+
+    html:not(.dark) body,
+    html:not(.dark) .grid-bg {
+      color: rgba(0,0,0,0.20);
+      background-image:
+        radial-gradient(ellipse 85% 70% at var(--glow-x) var(--glow-y), rgba(232,112,64,0.18) 0%, rgba(232,112,64,0.05) 35%, transparent 70%),
+        linear-gradient(currentColor 1.2px, transparent 1.2px),
+        linear-gradient(90deg, currentColor 1.2px, transparent 1.2px);
     }
 
     @keyframes glow-drift {
-      0%   { --glow-x: 25%; --glow-y: 20%; }
-      25%  { --glow-x: 78%; --glow-y: 12%; }
-      50%  { --glow-x: 65%; --glow-y: 72%; }
-      75%  { --glow-x: 12%; --glow-y: 58%; }
-      100% { --glow-x: 25%; --glow-y: 20%; }
+      0%   { --glow-x: 22%; --glow-y: 18%; }
+      25%  { --glow-x: 80%; --glow-y: 14%; }
+      50%  { --glow-x: 68%; --glow-y: 76%; }
+      75%  { --glow-x: 14%; --glow-y: 62%; }
+      100% { --glow-x: 22%; --glow-y: 18%; }
     }
 
     @media (prefers-reduced-motion: reduce) {

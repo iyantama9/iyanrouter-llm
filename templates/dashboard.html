@@ -268,6 +268,8 @@
               <option value="cv">Cavoti</option>
               <option value="bm">Bluesminds</option>
               <option value="nry">byNara</option>
+              <option value="dahl">Dahl</option>
+              <option value="qc">Qwen Cloud</option>
             </select>
             <input x-model="newKey" type="text" placeholder="Paste API key"
                    class="flex-1 bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 focus:border-primary/40 transition-all placeholder:font-sans placeholder:text-muted-foreground/40"
@@ -315,6 +317,8 @@
                         <span x-show="k.is_cv"  class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-sky-500/10 text-sky-400 border border-sky-500/20">Cavoti</span>
                         <span x-show="k.is_bm"  class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-violet-500/10 text-violet-400 border border-violet-500/20">Bluesminds</span>
                         <span x-show="k.is_nr"  class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">byNara</span>
+                        <span x-show="k.is_dahl" class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-rose-500/10 text-rose-400 border border-rose-500/20">Dahl</span>
+                        <span x-show="k.is_qc" class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-purple-500/10 text-purple-400 border border-purple-500/20">Qwen Cloud</span>
                       </div>
                     </td>
                     <td class="px-4 py-3">
@@ -401,6 +405,8 @@
                 <template x-for="m in pg.models.cavoti"    :key="'cv'+m"><option :value="m" x-text="'[Cavoti] ' + m"></option></template>
                 <template x-for="m in pg.models.bluesminds":key="'bm'+m"><option :value="m" x-text="'[Bluesminds] ' + m"></option></template>
                 <template x-for="m in pg.models.bynara"    :key="'nry'+m"><option :value="m" x-text="'[byNara] ' + m"></option></template>
+                <template x-for="m in pg.models.dahl"      :key="'dh'+m"><option :value="m" x-text="'[Dahl] ' + m.replace('dh/','')"></option></template>
+                <template x-for="m in pg.models.qwen_cloud" :key="'qc'+m"><option :value="m" x-text="'[Qwen] ' + m.replace('qc/','')"></option></template>
               </select>
               <button @click="pg.messages = []"
                       class="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5 shrink-0">
@@ -512,7 +518,9 @@
                        :class="prov.id === 'kc'  ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' :
                                prov.id === 'cv'  ? 'bg-sky-500/10 text-sky-400 border-sky-500/20' :
                                prov.id === 'bm'  ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' :
-                               'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'">
+                               prov.id === 'nry' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
+                               prov.id === 'dahl' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
+                               'bg-purple-500/10 text-purple-400 border-purple-500/20'">
                     <i data-lucide="network" class="w-4 h-4"></i>
                   </div>
                   <div>
@@ -530,7 +538,7 @@
                  @scroll="lines.forEach(l => l.position())">
               <template x-for="k in keys" :key="k.prefix">
                 <div :id="`node-key-${k.prefix}`"
-                     @click="setActiveKey(k.prefix, k.is_cv ? 'cv' : k.is_bm ? 'bm' : k.is_nr ? 'nry' : 'kc')"
+                     @click="setActiveKey(k.prefix, k.is_cv ? 'cv' : k.is_bm ? 'bm' : k.is_nr ? 'nry' : k.is_dahl ? 'dahl' : k.is_qc ? 'qc' : 'kc')"
                      class="border rounded-2xl p-3 flex flex-col gap-2 relative cursor-pointer transition-all hover:-translate-x-0.5 hover:shadow-sm"
                      :class="k.status === 'Active'
                        ? 'bg-card border-primary/40 ring-1 ring-primary/10'
@@ -554,8 +562,10 @@
                           :class="k.is_cv ? 'bg-sky-500/10 text-sky-400' :
                                   k.is_bm ? 'bg-violet-500/10 text-violet-400' :
                                   k.is_nr ? 'bg-emerald-500/10 text-emerald-400' :
+                                  k.is_dahl ? 'bg-rose-500/10 text-rose-400' :
+                                  k.is_qc ? 'bg-purple-500/10 text-purple-400' :
                                   'bg-orange-500/10 text-orange-400'"
-                          x-text="k.is_cv ? 'Cavoti' : k.is_bm ? 'Bluesminds' : k.is_nr ? 'byNara' : 'Kimchi'"></span>
+                          x-text="k.is_cv ? 'Cavoti' : k.is_bm ? 'Bluesminds' : k.is_nr ? 'byNara' : k.is_dahl ? 'Dahl' : k.is_qc ? 'Qwen Cloud' : 'Kimchi'"></span>
                   </div>
                 </div>
               </template>
@@ -601,12 +611,14 @@ function dashboard() {
       { id: 'kc',  name: 'Kimchi' },
       { id: 'cv',  name: 'Cavoti' },
       { id: 'bm',  name: 'Bluesminds' },
-      { id: 'nry', name: 'byNara' }
+      { id: 'nry', name: 'byNara' },
+      { id: 'dahl', name: 'Dahl' },
+      { id: 'qc',  name: 'Qwen Cloud' }
     ],
     lines: [],
     pg: {
       model: 'kc/gpt-4o-mini',
-      models: { kimchi: [], cavoti: [], bluesminds: [], bynara: [] },
+      models: { kimchi: [], cavoti: [], bluesminds: [], bynara: [], dahl: [], qwen_cloud: [] },
       messages: [],
       input: '',
       loading: false,
@@ -853,7 +865,7 @@ function dashboard() {
         const r = await fetch('/api/models');
         if (r.ok) {
           const d = await r.json();
-          this.pg.models = { kimchi: [], cavoti: [], bluesminds: [], bynara: [], ...d };
+          this.pg.models = { kimchi: [], cavoti: [], bluesminds: [], bynara: [], dahl: [], qwen_cloud: [], ...d };
           if (d.kimchi && d.kimchi.length) this.pg.model = d.kimchi[0];
         }
       } catch {}
@@ -1075,10 +1087,12 @@ function dashboard() {
         if (!outlet) return;
 
         const isTargetProv = (k) => {
-          if (prov.id === 'kc'  && !k.is_cv && !k.is_bm && !k.is_nr) return true;
+          if (prov.id === 'kc'  && !k.is_cv && !k.is_bm && !k.is_nr && !k.is_dahl && !k.is_qc) return true;
           if (prov.id === 'cv'  && k.is_cv) return true;
           if (prov.id === 'bm'  && k.is_bm) return true;
           if (prov.id === 'nry' && k.is_nr) return true;
+          if (prov.id === 'dahl' && k.is_dahl) return true;
+          if (prov.id === 'qc'  && k.is_qc) return true;
           return false;
         };
 
@@ -1088,7 +1102,9 @@ function dashboard() {
           if (inlet) {
             const color = prov.id === 'kc'  ? '#f97316' :
                           prov.id === 'cv'  ? '#38bdf8' :
-                          prov.id === 'bm'  ? '#a78bfa' : '#34d399';
+                          prov.id === 'bm'  ? '#a78bfa' :
+                          prov.id === 'nry' ? '#34d399' :
+                          prov.id === 'dahl' ? '#fb7185' : '#a855f7';
             this.lines.push(new LeaderLine(outlet, inlet, {
               color, size: 2, path: 'fluid',
               startSocket: 'right', endSocket: 'left',
