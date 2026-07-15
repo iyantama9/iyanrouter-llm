@@ -11,9 +11,10 @@ import httpx
 import app.config as config_module
 from app.config import (
     DEFAULT_UPSTREAM_URL, CAVOTI_API_KEY, CAVOTI_BASE_URL, BLUESMINDS_API_KEY, BLUESMINDS_BASE_URL,
-    ROUTER_PASSWORD, get_current_key, rotate_key, API_KEYS, NARA_BASE_URL,
-    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS,
-    get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key,
+    ROUTER_PASSWORD, get_current_key, rotate_key, API_KEYS, NARA_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL,
+    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS, DAHL_MODELS_SHORT, resolve_dahl_model, QWEN_CLOUD_MODELS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS,
+    get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key, get_current_dahl_key, rotate_dahl_key, get_current_qc_key, rotate_qc_key,
+    get_current_qc_key_for_model, rotate_qc_key_for_model, mark_qc_model_exhausted, QC_FALLBACK_ORDER,
     recent_requests, add_request_log,
 )
 from app.translator import (
@@ -65,6 +66,10 @@ async def list_models(request: Request):
         models.append(f"cv/{m}")
     for m in NARA_MODELS:
         models.append(f"nry/{m}")
+    for m in DAHL_MODELS_SHORT:
+        models.append(f"dh/{m}")
+    for m in QWEN_CLOUD_MODELS:
+        models.append(f"qc/{m}")
 
     data = []
     for m in models:
@@ -98,13 +103,20 @@ async def messages(request: Request):
             provider = "bm"
         elif payload["model"].startswith("nry/") or payload["model"] in NARA_MODELS:
             provider = "nry"
+        elif payload["model"].startswith("dh/") or payload["model"] in DAHL_MODELS_SHORT:
+            provider = "dahl"
+        elif payload["model"].startswith("qc/"):
+            provider = "qc"
         elif payload["model"].startswith("kc/") or payload["model"] in KIMCHI_MODELS:
             provider = "kc"
 
-    for prefix in ("kc/", "cv/", "bm/", "nry/"):
+    for prefix in ("kc/", "cv/", "bm/", "nry/", "dh/", "qc/"):
         if payload.get("model", "").startswith(prefix):
             payload["model"] = payload["model"][len(prefix):]
             break
+
+    if provider == "dahl":
+        payload["model"] = resolve_dahl_model(payload["model"])
 
     if provider == "cv":
         upstream_base_url = CAVOTI_BASE_URL
@@ -115,6 +127,13 @@ async def messages(request: Request):
     elif provider == "nry":
         upstream_base_url = NARA_BASE_URL
         log_model = f"nry/{payload['model']}"
+    elif provider == "dahl":
+        upstream_base_url = DAHL_BASE_URL
+        log_model = f"dh/{payload['model'].split('/', 1)[-1]}"
+    elif provider == "qc":
+        upstream_base_url = QWEN_CLOUD_BASE_URL
+        log_model = f"qc/{payload['model']}"
+        requested_qc_model = payload['model']
     else:
         upstream_base_url = DEFAULT_UPSTREAM_URL
         log_model = f"kc/{payload['model']}"
@@ -138,6 +157,10 @@ async def messages(request: Request):
         api_keys_to_use = BM_API_KEYS
     elif provider == "nry":
         api_keys_to_use = NR_API_KEYS
+    elif provider == "dahl":
+        api_keys_to_use = DAHL_API_KEYS
+    elif provider == "qc":
+        api_keys_to_use = QC_API_KEYS
     else:
         api_keys_to_use = API_KEYS
 
@@ -149,8 +172,12 @@ async def messages(request: Request):
         else:
             return JSONResponse(status_code=500, content={"error": "No upstream API keys available"})
 
+    # For Qwen Cloud, track the originally requested model so we can rotate per-model keys.
+    requested_qc_model = payload.get("model") if provider == "qc" else None
+
     if upstream_req.get("stream"):
         async def generate():
+            nonlocal requested_qc_model
             last_error_status = 429
             last_error_content = {"error": {"message": "All configured API keys are rate limited or unauthorized."}}
 
@@ -161,6 +188,7 @@ async def messages(request: Request):
 
                 context_window_hit = False
                 rotated_occurred = False
+                model_switched = False
 
                 for attempt in range(len(api_keys_to_use)):
                     if provider == "cv":
@@ -169,6 +197,10 @@ async def messages(request: Request):
                         current_key = get_current_bm_key()
                     elif provider == "nry":
                         current_key = get_current_nr_key()
+                    elif provider == "dahl":
+                        current_key = get_current_dahl_key()
+                    elif provider == "qc":
+                        current_key = get_current_qc_key_for_model(requested_qc_model)
                     else:
                         current_key = get_current_key()
 
@@ -206,6 +238,29 @@ async def messages(request: Request):
 
                                     rotated_occurred = True
                                     add_request_log(log_model, resp.status_code, current_key, True, int((time.time() - start_req_time) * 1000))
+
+                                    if provider == "qc" and requested_qc_model:
+                                        # Per-model key rotation: try next key for this model first.
+                                        mark_qc_model_exhausted(current_key, requested_qc_model)
+                                        if rotate_qc_key_for_model(requested_qc_model):
+                                            print(f"[LOG] QC model {requested_qc_model} exhausted on key, trying next key for same model")
+                                            continue
+                                        # All keys exhausted for this model; try fallback model.
+                                        fallback = None
+                                        for m in QC_FALLBACK_ORDER:
+                                            if m != requested_qc_model and m in QWEN_CLOUD_MODELS:
+                                                # Check if any key still has quota for this fallback model
+                                                if any(not config_module.is_qc_model_exhausted(k, m) for k in QC_API_KEYS):
+                                                    fallback = m
+                                                    break
+                                        if fallback:
+                                            print(f"[LOG] All QC keys exhausted for {requested_qc_model}, falling back to {fallback}")
+                                            requested_qc_model = fallback
+                                            upstream_req["model"] = fallback
+                                            log_model = f"qc/{fallback}"
+                                            model_switched = True
+                                            continue
+
                                     if provider == "kc":
                                         rotate_key()
                                     elif provider == "cv":
@@ -214,6 +269,10 @@ async def messages(request: Request):
                                         rotate_bm_key()
                                     elif provider == "nry":
                                         rotate_nr_key()
+                                    elif provider == "dahl":
+                                        rotate_dahl_key()
+                                    elif provider == "qc":
+                                        rotate_qc_key()
                                     last_error_status = resp.status_code
                                     last_error_content = err_data or {"error": f"HTTP {resp.status_code} error"}
                                     await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -253,6 +312,10 @@ async def messages(request: Request):
                                         rotate_bm_key(reason="Slow")
                                     elif provider == "nry":
                                         rotate_nr_key(reason="Slow")
+                                    elif provider == "qc":
+                                        # Per-model slow rotation: move to next key for this model
+                                        rotate_qc_key_for_model(requested_qc_model)
+                                    # Dahl upstream is inherently slow; don't rotate on slow TTFT
                                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                                 await sse_broadcaster.broadcast("status", await _build_status_dict())
                                 return
@@ -287,9 +350,18 @@ async def messages(request: Request):
                                 rotate_bm_key()
                             elif provider == "nry":
                                 rotate_nr_key()
+                            elif provider == "dahl":
+                                rotate_dahl_key()
+                            elif provider == "qc":
+                                rotate_qc_key()
                             last_error_status = 500
                             last_error_content = {"error": str(e)}
                             await sse_broadcaster.broadcast("status", await _build_status_dict())
+
+                # If we switched QC model due to exhaustion, re-scan from key index 0 for the new model
+                if model_switched:
+                    model_switched = False
+                    continue
 
                 if context_window_hit:
                     continue
@@ -312,6 +384,7 @@ async def messages(request: Request):
 
         context_window_hit = False
         rotated_occurred = False
+        model_switched = False
 
         for attempt in range(len(api_keys_to_use)):
             if provider == "cv":
@@ -320,6 +393,10 @@ async def messages(request: Request):
                 current_key = get_current_bm_key()
             elif provider == "nry":
                 current_key = get_current_nr_key()
+            elif provider == "dahl":
+                current_key = get_current_dahl_key()
+            elif provider == "qc":
+                current_key = get_current_qc_key_for_model(requested_qc_model)
             else:
                 current_key = get_current_key()
 
@@ -354,6 +431,28 @@ async def messages(request: Request):
 
                     rotated_occurred = True
                     add_request_log(log_model, resp.status_code, current_key, True, int((time.time() - start_req_time) * 1000))
+
+                    if provider == "qc" and requested_qc_model:
+                        # Per-model key rotation: try next key for this model first.
+                        mark_qc_model_exhausted(current_key, requested_qc_model)
+                        if rotate_qc_key_for_model(requested_qc_model):
+                            print(f"[LOG] QC model {requested_qc_model} exhausted on key, trying next key for same model")
+                            continue
+                        # All keys exhausted for this model; try fallback model.
+                        fallback = None
+                        for m in QC_FALLBACK_ORDER:
+                            if m != requested_qc_model and m in QWEN_CLOUD_MODELS:
+                                if any(not config_module.is_qc_model_exhausted(k, m) for k in QC_API_KEYS):
+                                    fallback = m
+                                    break
+                        if fallback:
+                            print(f"[LOG] All QC keys exhausted for {requested_qc_model}, falling back to {fallback}")
+                            requested_qc_model = fallback
+                            upstream_req["model"] = fallback
+                            log_model = f"qc/{fallback}"
+                            model_switched = True
+                            continue
+
                     if provider == "kc":
                         rotate_key()
                     elif provider == "cv":
@@ -362,6 +461,10 @@ async def messages(request: Request):
                         rotate_bm_key()
                     elif provider == "nry":
                         rotate_nr_key()
+                    elif provider == "dahl":
+                        rotate_dahl_key()
+                    elif provider == "qc":
+                        rotate_qc_key()
                     last_error_status = resp.status_code
                     last_error_content = err_json or {"error": resp.text}
                     await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -394,6 +497,10 @@ async def messages(request: Request):
                         rotate_bm_key(reason="Slow")
                     elif provider == "nry":
                         rotate_nr_key(reason="Slow")
+                    elif provider == "qc":
+                        # Per-model slow rotation: move to next key for this model
+                        rotate_qc_key_for_model(requested_qc_model)
+                    # Dahl upstream is inherently slow; don't rotate on slow total time
                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                 await sse_broadcaster.broadcast("status", await _build_status_dict())
                 return JSONResponse(anthropic_resp)
@@ -428,9 +535,18 @@ async def messages(request: Request):
                     rotate_bm_key()
                 elif provider == "nry":
                     rotate_nr_key()
+                elif provider == "dahl":
+                    rotate_dahl_key()
+                elif provider == "qc":
+                    rotate_qc_key()
                 last_error_status = 500
                 last_error_content = {"error": str(e)}
                 await sse_broadcaster.broadcast("status", await _build_status_dict())
+
+        # If we switched QC model due to exhaustion, re-scan from key index 0 for the new model
+        if model_switched:
+            model_switched = False
+            continue
 
         if context_window_hit:
             continue
