@@ -19,6 +19,7 @@ BLUESMINDS_MODELS_RAW = os.getenv("BLUESMINDS_MODELS", "")
 NARA_MODELS_RAW = os.getenv("NARA_MODELS", "")
 DAHL_MODELS_RAW = os.getenv("DAHL_MODELS", "")
 QWEN_CLOUD_MODELS_RAW = os.getenv("QWEN_CLOUD_MODELS", "")
+MARKETKU_MODELS_RAW = os.getenv("MARKETKU_MODELS", "")
 
 KIMCHI_MODELS = [m.strip() for m in KIMCHI_MODELS_RAW.split(",") if m.strip()]
 CAVOTI_MODELS = [m.strip() for m in CAVOTI_MODELS_RAW.split(",") if m.strip()]
@@ -26,6 +27,7 @@ BLUESMINDS_MODELS = [m.strip() for m in BLUESMINDS_MODELS_RAW.split(",") if m.st
 NARA_MODELS = [m.strip() for m in NARA_MODELS_RAW.split(",") if m.strip()]
 DAHL_MODELS = [m.strip() for m in DAHL_MODELS_RAW.split(",") if m.strip()]
 QWEN_CLOUD_MODELS = [m.strip() for m in QWEN_CLOUD_MODELS_RAW.split(",") if m.strip()]
+MARKETKU_MODELS = [m.strip() for m in MARKETKU_MODELS_RAW.split(",") if m.strip()]
 # Short display names: strip vendor prefixes so upstream "moonshotai/Kimi-K2.6" becomes "Kimi-K2.6"
 DAHL_MODELS_SHORT = [m.split("/", 1)[-1] if "/" in m else m for m in DAHL_MODELS]
 DAHL_MODEL_MAP = dict(zip(DAHL_MODELS_SHORT, DAHL_MODELS))
@@ -40,6 +42,8 @@ DAHL_API_KEYS_RAW = os.getenv("DAHL_API_KEYS", "")
 DAHL_API_KEYS_ENV = [k.strip() for k in DAHL_API_KEYS_RAW.split(",") if k.strip()]
 QWEN_CLOUD_API_KEYS_RAW = os.getenv("QWEN_CLOUD_API_KEYS", "")
 QWEN_CLOUD_API_KEYS_ENV = [k.strip() for k in QWEN_CLOUD_API_KEYS_RAW.split(",") if k.strip()]
+MARKETKU_API_KEYS_RAW = os.getenv("MARKETKU_API_KEYS", os.getenv("MARKETKU_API_KEY", ""))
+MARKETKU_API_KEYS_ENV = [k.strip() for k in MARKETKU_API_KEYS_RAW.split(",") if k.strip()]
 
 # Per-model fallback order for Qwen Cloud when ALL keys have exhausted the requested model
 QC_FALLBACK_ORDER_RAW = os.getenv("QC_FALLBACK_ORDER", "qwen3.7-max,qwen-max,qwen-plus,deepseek-v3.2,glm-5.2,kimi-k2.7-code,qwen-turbo")
@@ -47,6 +51,7 @@ QC_FALLBACK_ORDER = [m.strip() for m in QC_FALLBACK_ORDER_RAW.split(",") if m.st
 
 DAHL_BASE_URL = os.getenv("DAHL_BASE_URL", "https://inference.dahl.global/v1").rstrip("/")
 QWEN_CLOUD_BASE_URL = os.getenv("QWEN_CLOUD_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1").rstrip("/")
+MARKETKU_BASE_URL = os.getenv("MARKETKU_BASE_URL", "https://router.marketku.id/v1").rstrip("/")
 
 ROUTER_PASSWORD = os.getenv("ROUTER_PASSWORD")
 PORT_STR = os.getenv("PORT")
@@ -96,6 +101,8 @@ BM_API_KEYS = []
 NR_API_KEYS = []
 DAHL_API_KEYS = []
 QC_API_KEYS = []
+MARKETKU_API_KEYS = []
+
 key_statuses = {}
 key_limited_at: dict[str, float] = {}  # key_value -> time.time() when marked Limited
 total_requests = 0
@@ -109,6 +116,7 @@ current_bm_key_index = 0
 current_nr_key_index = 0
 current_dahl_key_index = 0
 current_qc_key_index = 0
+current_marketku_key_index = 0
 
 # Qwen Cloud per-model key state
 # model_short -> current key index for that model
@@ -125,7 +133,7 @@ def _bg(coro):
 
 
 async def init_state_from_db():
-    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, key_statuses, total_requests, failover_count, current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, START_TIME
+    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, key_statuses, total_requests, failover_count, current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index, START_TIME
 
     API_KEYS.clear()
     CV_API_KEYS.clear()
@@ -133,6 +141,7 @@ async def init_state_from_db():
     NR_API_KEYS.clear()
     DAHL_API_KEYS.clear()
     QC_API_KEYS.clear()
+    MARKETKU_API_KEYS.clear()
     key_statuses.clear()
 
     # Load keys from DB
@@ -155,6 +164,8 @@ async def init_state_from_db():
                 DAHL_API_KEYS.append(val)
             elif provider == "qc":
                 QC_API_KEYS.append(val)
+            elif provider == "marketku":
+                MARKETKU_API_KEYS.append(val)
             else:
                 API_KEYS.append(val)
             key_statuses[val] = r["status"]
@@ -230,6 +241,17 @@ async def init_state_from_db():
             await db_execute(
                 "INSERT INTO api_keys (key_value, key_prefix, status, provider) VALUES ($1, $2, $3, 'qc') ON CONFLICT (key_value) DO UPDATE SET provider='qc'",
                 qc_key, prefix, "Standby"
+            )
+
+    # Seed MarketKu keys from env
+    for mk_key in MARKETKU_API_KEYS_ENV:
+        if mk_key not in MARKETKU_API_KEYS:
+            MARKETKU_API_KEYS.append(mk_key)
+            key_statuses[mk_key] = "Standby"
+            prefix = mk_key[:15] + "..." if len(mk_key) > 15 else mk_key
+            await db_execute(
+                "INSERT INTO api_keys (key_value, key_prefix, status, provider) VALUES ($1, $2, $3, 'marketku') ON CONFLICT (key_value) DO UPDATE SET provider='marketku'",
+                mk_key, prefix, "Standby"
             )
 
     # Fix active key index
@@ -311,6 +333,19 @@ async def init_state_from_db():
                 QC_API_KEYS[0]
             )
 
+    for i, k in enumerate(MARKETKU_API_KEYS):
+        if key_statuses.get(k) == "Active":
+            current_marketku_key_index = i
+            break
+    else:
+        if MARKETKU_API_KEYS:
+            current_marketku_key_index = 0
+            key_statuses[MARKETKU_API_KEYS[0]] = "Active"
+            await db_execute(
+                "UPDATE api_keys SET status = 'Active' WHERE key_value = $1",
+                MARKETKU_API_KEYS[0]
+            )
+
     # Load stats from DB
     tr = await db_fetchrow("SELECT value FROM server_config WHERE key = 'total_requests'")
     if tr:
@@ -359,7 +394,7 @@ async def init_state_from_db():
             key_statuses[key] = "Standby"
             await db_execute("UPDATE api_keys SET status = 'Standby' WHERE key_value = $1", key)
 
-    print(f"[INIT] Loaded {len(API_KEYS)} kc / {len(CV_API_KEYS)} cv / {len(BM_API_KEYS)} bm / {len(NR_API_KEYS)} nry / {len(DAHL_API_KEYS)} dahl keys, {total_requests} total requests, {failover_count} failovers from DB")
+    print(f"[INIT] Loaded {len(API_KEYS)} kc / {len(CV_API_KEYS)} cv / {len(BM_API_KEYS)} bm / {len(NR_API_KEYS)} nry / {len(DAHL_API_KEYS)} dahl / {len(QC_API_KEYS)} qc / {len(MARKETKU_API_KEYS)} marketku keys, {total_requests} total requests, {failover_count} failovers from DB")
 
 
 async def auto_reset_limited_keys():
@@ -590,6 +625,31 @@ def rotate_qc_key(reason: str = "Limited"):
     return new_key
 
 
+def get_current_marketku_key():
+    if not MARKETKU_API_KEYS:
+        return ""
+    return MARKETKU_API_KEYS[current_marketku_key_index]
+
+
+def rotate_marketku_key(reason: str = "Limited"):
+    global current_marketku_key_index, failover_count
+    if len(MARKETKU_API_KEYS) <= 1:
+        return get_current_marketku_key()
+    old_key = get_current_marketku_key()
+    key_statuses[old_key] = reason
+    if reason == "Limited":
+        key_limited_at[old_key] = time.time()
+    current_marketku_key_index = (current_marketku_key_index + 1) % len(MARKETKU_API_KEYS)
+    new_key = get_current_marketku_key()
+    key_statuses[new_key] = "Active"
+    failover_count += 1
+    print(f"[LOG] Rotated marketku key → index {current_marketku_key_index}: {new_key[:15]}... (reason: {reason})")
+    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
+    _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
+    _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
+    return new_key
+
+
 def add_request_log(model, status_code, key_used, rotated, latency_ms, input_tokens: int = 0, output_tokens: int = 0):
     global total_requests, total_tokens
     total_requests += 1
@@ -623,11 +683,11 @@ def add_request_log(model, status_code, key_used, rotated, latency_ms, input_tok
 
 
 def add_api_key(new_key: str, key_type: str = "auto"):
-    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS
+    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS
     new_key = new_key.strip()
     if not new_key:
         return False, "Key cannot be empty"
-    if new_key in API_KEYS or new_key in CV_API_KEYS or new_key in BM_API_KEYS or new_key in NR_API_KEYS or new_key in DAHL_API_KEYS or new_key in QC_API_KEYS:
+    if new_key in API_KEYS or new_key in CV_API_KEYS or new_key in BM_API_KEYS or new_key in NR_API_KEYS or new_key in DAHL_API_KEYS or new_key in QC_API_KEYS or new_key in MARKETKU_API_KEYS:
         return False, "Key already exists"
 
     if key_type == "cv":
@@ -645,6 +705,9 @@ def add_api_key(new_key: str, key_type: str = "auto"):
     elif key_type == "qc":
         QC_API_KEYS.append(new_key)
         provider = "qc"
+    elif key_type == "marketku":
+        MARKETKU_API_KEYS.append(new_key)
+        provider = "marketku"
     else:
         API_KEYS.append(new_key)
         provider = "kc"
@@ -663,7 +726,7 @@ def add_api_key(new_key: str, key_type: str = "auto"):
 
 
 def remove_api_key(key_prefix: str):
-    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index
+    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index
     target_key = None
     target_list = None
 
@@ -706,6 +769,13 @@ def remove_api_key(key_prefix: str):
             if key.startswith(key_prefix):
                 target_key = key
                 target_list = QC_API_KEYS
+                break
+
+    if not target_key:
+        for key in MARKETKU_API_KEYS:
+            if key.startswith(key_prefix):
+                target_key = key
+                target_list = MARKETKU_API_KEYS
                 break
 
     if not target_key:
@@ -760,7 +830,7 @@ def remove_api_key(key_prefix: str):
             current_dahl_key_index = DAHL_API_KEYS.index(get_current_dahl_key()) if get_current_dahl_key() in DAHL_API_KEYS else 0
         except Exception:
             current_dahl_key_index = 0
-    else:
+    elif target_list == QC_API_KEYS:
         active_key = get_current_qc_key()
         if target_key == active_key:
             rotate_qc_key()
@@ -769,6 +839,15 @@ def remove_api_key(key_prefix: str):
             current_qc_key_index = QC_API_KEYS.index(get_current_qc_key()) if get_current_qc_key() in QC_API_KEYS else 0
         except Exception:
             current_qc_key_index = 0
+    else:
+        active_key = get_current_marketku_key()
+        if target_key == active_key:
+            rotate_marketku_key()
+        MARKETKU_API_KEYS.remove(target_key)
+        try:
+            current_marketku_key_index = MARKETKU_API_KEYS.index(get_current_marketku_key()) if get_current_marketku_key() in MARKETKU_API_KEYS else 0
+        except Exception:
+            current_marketku_key_index = 0
 
     if target_key in key_statuses:
         del key_statuses[target_key]
@@ -781,7 +860,7 @@ def remove_api_key(key_prefix: str):
 
 
 def reset_key_status(key_prefix: str):
-    for key in API_KEYS + CV_API_KEYS + BM_API_KEYS + NR_API_KEYS + DAHL_API_KEYS + QC_API_KEYS:
+    for key in API_KEYS + CV_API_KEYS + BM_API_KEYS + NR_API_KEYS + DAHL_API_KEYS + QC_API_KEYS + MARKETKU_API_KEYS:
         if key.startswith(key_prefix):
             key_statuses[key] = "Standby"
             reset_qc_model_failures(key)
@@ -791,7 +870,7 @@ def reset_key_status(key_prefix: str):
 
 
 def set_active_key(key_prefix: str, provider: str = None):
-    global current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index
+    global current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index
     target_key = None
     target_list = None
 
@@ -801,9 +880,10 @@ def set_active_key(key_prefix: str, provider: str = None):
     elif provider == "nry": target_list = NR_API_KEYS
     elif provider == "dahl": target_list = DAHL_API_KEYS
     elif provider == "qc": target_list = QC_API_KEYS
+    elif provider == "marketku": target_list = MARKETKU_API_KEYS
     else:
         # Auto detect list if provider not explicitly passed
-        for lst in [API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS]:
+        for lst in [API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS]:
             for k in lst:
                 if k.startswith(key_prefix):
                     target_key = k
@@ -840,13 +920,14 @@ def set_active_key(key_prefix: str, provider: str = None):
     elif target_list == NR_API_KEYS: current_nr_key_index = idx
     elif target_list == DAHL_API_KEYS: current_dahl_key_index = idx
     elif target_list == QC_API_KEYS: current_qc_key_index = idx
+    elif target_list == MARKETKU_API_KEYS: current_marketku_key_index = idx
 
     return True, "Key set as Active"
 
 
 def get_masked_keys():
     result = []
-    for idx, key in enumerate(API_KEYS + CV_API_KEYS + BM_API_KEYS + NR_API_KEYS + DAHL_API_KEYS + QC_API_KEYS):
+    for idx, key in enumerate(API_KEYS + CV_API_KEYS + BM_API_KEYS + NR_API_KEYS + DAHL_API_KEYS + QC_API_KEYS + MARKETKU_API_KEYS):
         status = key_statuses.get(key, "Standby")
         masked = key[:15] + "..." if len(key) > 15 else key
         result.append({
@@ -859,7 +940,8 @@ def get_masked_keys():
             "is_bm": key in BM_API_KEYS,
             "is_nr": key in NR_API_KEYS,
             "is_dahl": key in DAHL_API_KEYS,
-            "is_qc": key in QC_API_KEYS
+            "is_qc": key in QC_API_KEYS,
+            "is_marketku": key in MARKETKU_API_KEYS
         })
     return result
 

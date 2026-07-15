@@ -11,9 +11,9 @@ import httpx
 import app.config as config_module
 from app.config import (
     DEFAULT_UPSTREAM_URL, CAVOTI_API_KEY, CAVOTI_BASE_URL, BLUESMINDS_API_KEY, BLUESMINDS_BASE_URL,
-    ROUTER_PASSWORD, get_current_key, rotate_key, API_KEYS, NARA_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL,
-    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS, DAHL_MODELS_SHORT, resolve_dahl_model, QWEN_CLOUD_MODELS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS,
-    get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key, get_current_dahl_key, rotate_dahl_key, get_current_qc_key, rotate_qc_key,
+    ROUTER_PASSWORD, get_current_key, rotate_key, API_KEYS, NARA_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL,
+    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS, DAHL_MODELS_SHORT, resolve_dahl_model, QWEN_CLOUD_MODELS, MARKETKU_MODELS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS,
+    get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key, get_current_dahl_key, rotate_dahl_key, get_current_qc_key, rotate_qc_key, get_current_marketku_key, rotate_marketku_key,
     get_current_qc_key_for_model, rotate_qc_key_for_model, mark_qc_model_exhausted, QC_FALLBACK_ORDER,
     recent_requests, add_request_log,
 )
@@ -66,10 +66,12 @@ async def list_models(request: Request):
         models.append(f"cv/{m}")
     for m in NARA_MODELS:
         models.append(f"nry/{m}")
-    for m in DAHL_MODELS_SHORT:
+    for m in DAHL_MODELS:
         models.append(f"dh/{m}")
     for m in QWEN_CLOUD_MODELS:
         models.append(f"qc/{m}")
+    for m in MARKETKU_MODELS:
+        models.append(m)
 
     data = []
     for m in models:
@@ -107,10 +109,12 @@ async def messages(request: Request):
             provider = "dahl"
         elif payload["model"].startswith("qc/"):
             provider = "qc"
+        elif payload["model"].startswith("mk/") or payload["model"] in MARKETKU_MODELS:
+            provider = "marketku"
         elif payload["model"].startswith("kc/") or payload["model"] in KIMCHI_MODELS:
             provider = "kc"
 
-    for prefix in ("kc/", "cv/", "bm/", "nry/", "dh/", "qc/"):
+    for prefix in ("kc/", "cv/", "bm/", "nry/", "dh/", "qc/", "mk/"):
         if payload.get("model", "").startswith(prefix):
             payload["model"] = payload["model"][len(prefix):]
             break
@@ -133,7 +137,9 @@ async def messages(request: Request):
     elif provider == "qc":
         upstream_base_url = QWEN_CLOUD_BASE_URL
         log_model = f"qc/{payload['model']}"
-        requested_qc_model = payload['model']
+    elif provider == "marketku":
+        upstream_base_url = MARKETKU_BASE_URL
+        log_model = f"mk/{payload['model']}"
     else:
         upstream_base_url = DEFAULT_UPSTREAM_URL
         log_model = f"kc/{payload['model']}"
@@ -161,6 +167,8 @@ async def messages(request: Request):
         api_keys_to_use = DAHL_API_KEYS
     elif provider == "qc":
         api_keys_to_use = QC_API_KEYS
+    elif provider == "marketku":
+        api_keys_to_use = MARKETKU_API_KEYS
     else:
         api_keys_to_use = API_KEYS
 
@@ -172,7 +180,6 @@ async def messages(request: Request):
         else:
             return JSONResponse(status_code=500, content={"error": "No upstream API keys available"})
 
-    # For Qwen Cloud, track the originally requested model so we can rotate per-model keys.
     requested_qc_model = payload.get("model") if provider == "qc" else None
 
     if upstream_req.get("stream"):
@@ -202,6 +209,8 @@ async def messages(request: Request):
                         current_key = get_current_dahl_key()
                     elif provider == "qc":
                         current_key = get_current_qc_key_for_model(requested_qc_model)
+                    elif provider == "marketku":
+                        current_key = get_current_marketku_key()
                     else:
                         current_key = get_current_key()
 
@@ -241,16 +250,13 @@ async def messages(request: Request):
                                     add_request_log(log_model, resp.status_code, current_key, True, int((time.time() - start_req_time) * 1000))
 
                                     if provider == "qc" and requested_qc_model:
-                                        # Per-model key rotation: try next key for this model first.
                                         mark_qc_model_exhausted(current_key, requested_qc_model)
                                         if rotate_qc_key_for_model(requested_qc_model):
                                             print(f"[LOG] QC model {requested_qc_model} exhausted on key, trying next key for same model")
                                             continue
-                                        # All keys exhausted for this model; try fallback model.
                                         fallback = None
                                         for m in QC_FALLBACK_ORDER:
                                             if m != requested_qc_model and m in QWEN_CLOUD_MODELS:
-                                                # Check if any key still has quota for this fallback model
                                                 if any(not config_module.is_qc_model_exhausted(k, m) for k in QC_API_KEYS):
                                                     fallback = m
                                                     break
@@ -274,6 +280,8 @@ async def messages(request: Request):
                                         rotate_dahl_key()
                                     elif provider == "qc":
                                         rotate_qc_key()
+                                    elif provider == "marketku":
+                                        rotate_marketku_key()
                                     last_error_status = resp.status_code
                                     last_error_content = err_data or {"error": f"HTTP {resp.status_code} error"}
                                     await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -314,9 +322,9 @@ async def messages(request: Request):
                                     elif provider == "nry":
                                         rotate_nr_key(reason="Slow")
                                     elif provider == "qc":
-                                        # Per-model slow rotation: move to next key for this model
                                         rotate_qc_key_for_model(requested_qc_model)
-                                    # Dahl upstream is inherently slow; don't rotate on slow TTFT
+                                    elif provider == "marketku":
+                                        rotate_marketku_key()
                                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                                 await sse_broadcaster.broadcast("status", await _build_status_dict())
                                 return
@@ -355,11 +363,12 @@ async def messages(request: Request):
                                 rotate_dahl_key()
                             elif provider == "qc":
                                 rotate_qc_key()
+                            elif provider == "marketku":
+                                rotate_marketku_key()
                             last_error_status = 500
                             last_error_content = {"error": str(e)}
                             await sse_broadcaster.broadcast("status", await _build_status_dict())
 
-                # If we switched QC model due to exhaustion, re-scan from key index 0 for the new model
                 if model_switched:
                     model_switched = False
                     continue
@@ -398,6 +407,8 @@ async def messages(request: Request):
                 current_key = get_current_dahl_key()
             elif provider == "qc":
                 current_key = get_current_qc_key_for_model(requested_qc_model)
+            elif provider == "marketku":
+                current_key = get_current_marketku_key()
             else:
                 current_key = get_current_key()
 
