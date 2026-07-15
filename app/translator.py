@@ -169,7 +169,7 @@ def normalize_for_qwen(messages):
 def build_openai_request(body, provider="kc"):
     claude_model = body.get("model", "")
 
-    if provider in ("bm", "cv", "dahl", "nry", "qc"):
+    if provider in ("bm", "cv", "dahl", "nry", "qc", "marketku"):
         openai_model = claude_model
     else:
         fallback = config.KIMCHI_MODELS[-1] if config.KIMCHI_MODELS else ""
