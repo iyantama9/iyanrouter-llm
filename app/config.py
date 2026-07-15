@@ -123,6 +123,8 @@ current_marketku_key_index = 0
 qc_model_key_index: dict[str, int] = {}
 # key_value -> {model_short: exhausted?}
 qc_model_failures: dict[str, dict[str, bool]] = {}
+# key_value -> {model_short: timestamp when exhausted}
+qc_model_exhausted_at: dict[str, dict[str, float]] = {}
 
 
 def _bg(coro):
@@ -591,18 +593,39 @@ def mark_qc_model_exhausted(key: str, model: str):
     """Mark a specific model as exhausted for a given key."""
     if key not in qc_model_failures:
         qc_model_failures[key] = {}
+    if key not in qc_model_exhausted_at:
+        qc_model_exhausted_at[key] = {}
     qc_model_failures[key][model] = True
+    qc_model_exhausted_at[key][model] = time.time()
 
 
 def is_qc_model_exhausted(key: str, model: str) -> bool:
-    """Check whether a key has exhausted quota for a specific model."""
-    return qc_model_failures.get(key, {}).get(model, False)
+    """Check whether a key has exhausted quota for a specific model.
+
+    Auto-resets after 24 hours (Qwen Cloud daily quota cycle).
+    """
+    if not qc_model_failures.get(key, {}).get(model, False):
+        return False
+
+    # Check if cooldown period has passed (24 hours)
+    exhausted_at = qc_model_exhausted_at.get(key, {}).get(model, 0)
+    if exhausted_at and (time.time() - exhausted_at >= 86400):  # 24 hours
+        # Auto-reset after cooldown
+        if key in qc_model_failures and model in qc_model_failures[key]:
+            del qc_model_failures[key][model]
+        if key in qc_model_exhausted_at and model in qc_model_exhausted_at[key]:
+            del qc_model_exhausted_at[key][model]
+        return False
+
+    return True
 
 
 def reset_qc_model_failures(key: str):
     """Clear per-model failure state for a key (e.g. on cooldown/manual reset)."""
     if key in qc_model_failures:
         del qc_model_failures[key]
+    if key in qc_model_exhausted_at:
+        del qc_model_exhausted_at[key]
 
 
 def rotate_qc_key(reason: str = "Limited"):
