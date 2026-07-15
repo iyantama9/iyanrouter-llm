@@ -218,7 +218,7 @@ async def messages(request: Request):
                                 headers=headers,
                                 json=upstream_req,
                             ) as resp:
-                                if resp.status_code in (401, 402, 429, 500, 502, 503, 504):
+                                if resp.status_code in (401, 402, 403, 404, 429, 500, 502, 503, 504):
                                     err_data = None
                                     try:
                                         await resp.aread()
@@ -413,7 +413,7 @@ async def messages(request: Request):
                         headers=headers,
                         json=upstream_req,
                     )
-                if resp.status_code in (401, 402, 429, 500, 502, 503, 504):
+                if resp.status_code in (401, 402, 403, 404, 429, 500, 502, 503, 504):
                     err_json = None
                     try:
                         err_json = resp.json()
