@@ -119,13 +119,10 @@ FORMAT: Always use fenced code blocks with language identifiers. Never truncate 
 
 
 def normalize_for_qwen(messages):
-    """Normalize messages for Qwen Cloud API compatibility.
+    """Normalize text-model messages for Qwen Cloud compatibility.
 
-    Qwen Cloud has stricter content format requirements:
-    - User messages must have string content (no arrays)
-    - Tool messages must have string content
-    - Assistant messages with tool_calls must have string or null content
-    - Images should be converted to placeholder text
+    Qwen image models use a different contract and are handled separately in
+    ``build_openai_request``.
     """
     normalized = []
     for msg in messages:
@@ -169,7 +166,7 @@ def normalize_for_qwen(messages):
 def build_openai_request(body, provider="kc"):
     claude_model = body.get("model", "")
 
-    if provider in ("bm", "cv", "dahl", "nry", "qc", "marketku"):
+    if provider in ("bm", "cv", "dahl", "nry", "qc", "marketku", "atomesus"):
         openai_model = claude_model
     else:
         fallback = config.KIMCHI_MODELS[-1] if config.KIMCHI_MODELS else ""
@@ -185,12 +182,21 @@ def build_openai_request(body, provider="kc"):
             openai_model = claude_model if claude_model in config.KIMCHI_MODELS else fallback
 
     messages = to_openai_messages(body)
+    is_qwen_image = provider == "qc" and "image" in openai_model.lower()
 
-    # Qwen Cloud requires simplified content format
-    if provider == "qc":
+    if is_qwen_image:
+        # Qwen image generation requires the first message to be a user message
+        # and its content to be a list of multimodal-style blocks.
+        user_messages = [m for m in messages if m.get("role") == "user"]
+        last_user = user_messages[-1] if user_messages else {"role": "user", "content": ""}
+        content = last_user.get("content", "")
+        if not isinstance(content, list):
+            content = [{"type": "text", "text": str(content)}]
+        messages = [{"role": "user", "content": content}]
+    elif provider == "qc":
         messages = normalize_for_qwen(messages)
 
-    if config.AUGMENT_SYSTEM_PROMPT:
+    if config.AUGMENT_SYSTEM_PROMPT and not is_qwen_image:
         if messages and messages[0]["role"] == "system":
             messages[0]["content"] = _ROUTER_BEHAVIOR + messages[0]["content"]
         else:
@@ -277,6 +283,11 @@ def to_anthropic_response(openai_resp, model, msg_id):
             "name": tc["function"]["name"],
             "input": input_data,
         })
+
+    for image in message.get("images") or []:
+        image_url = image.get("image_url", {}).get("url") or image.get("url", "")
+        if image_url:
+            content.append({"type": "image", "source": {"type": "url", "url": image_url}})
 
     stop_reason = "tool_use" if finish_reason == "tool_calls" else "end_turn"
     return {

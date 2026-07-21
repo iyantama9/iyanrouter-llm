@@ -11,9 +11,9 @@ import httpx
 import app.config as config_module
 from app.config import (
     DEFAULT_UPSTREAM_URL, CAVOTI_API_KEY, CAVOTI_BASE_URL, BLUESMINDS_API_KEY, BLUESMINDS_BASE_URL,
-    ROUTER_PASSWORD, get_current_key, rotate_key, API_KEYS, NARA_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL,
-    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS, DAHL_MODELS_SHORT, resolve_dahl_model, QWEN_CLOUD_MODELS, MARKETKU_MODELS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS,
-    get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key, get_current_dahl_key, rotate_dahl_key, get_current_qc_key, rotate_qc_key, get_current_marketku_key, rotate_marketku_key,
+    ROUTER_PASSWORD, get_current_key, rotate_key, API_KEYS, NARA_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL, ATOMESUS_BASE_URL,
+    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS, DAHL_MODELS_SHORT, resolve_dahl_model, QWEN_CLOUD_MODELS, MARKETKU_MODELS, ATOMESUS_MODELS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS,
+    get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key, get_current_dahl_key, rotate_dahl_key, get_current_qc_key, rotate_qc_key, get_current_marketku_key, rotate_marketku_key, get_current_atomesus_key, rotate_atomesus_key,
     get_current_qc_key_for_model, rotate_qc_key_for_model, mark_qc_model_exhausted, QC_FALLBACK_ORDER,
     recent_requests, add_request_log,
 )
@@ -53,6 +53,64 @@ def _check_router_auth(request: Request):
     return True
 
 
+def _qwen_image_request(payload: dict) -> dict:
+    prompt = ""
+    for message in reversed(payload.get("messages", [])):
+        if message.get("role") != "user":
+            continue
+        content = message.get("content", "")
+        if isinstance(content, str):
+            prompt = content
+        elif isinstance(content, list):
+            prompt = "\n".join(
+                block.get("text", "")
+                for block in content
+                if isinstance(block, dict) and block.get("text")
+            )
+        break
+
+    return {
+        "model": payload["model"],
+        "input": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [{"text": prompt or "Generate an image"}],
+                }
+            ]
+        },
+        "parameters": {
+            "prompt_extend": True,
+            "watermark": False,
+            "size": "1024*1024",
+            "n": 1,
+        },
+    }
+
+
+def _qwen_image_response(data: dict, model: str, msg_id: str) -> dict:
+    choices = data.get("output", {}).get("choices", [])
+    blocks = choices[0].get("message", {}).get("content", []) if choices else []
+    content = [
+        {"type": "image", "source": {"type": "url", "url": block["image"]}}
+        for block in blocks
+        if isinstance(block, dict) and block.get("image")
+    ]
+    return {
+        "id": msg_id,
+        "type": "message",
+        "role": "assistant",
+        "content": content,
+        "model": model,
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 0,
+            "output_tokens": 0,
+        },
+    }
+
+
 @router.get("/v1/models")
 @router.get("/models")
 async def list_models(request: Request):
@@ -71,7 +129,9 @@ async def list_models(request: Request):
     for m in QWEN_CLOUD_MODELS:
         models.append(f"qc/{m}")
     for m in MARKETKU_MODELS:
-        models.append(m)
+        models.append(f"mk/{m}")
+    for m in ATOMESUS_MODELS:
+        models.append(f"at/{m}")
 
     data = []
     for m in models:
@@ -111,10 +171,12 @@ async def messages(request: Request):
             provider = "qc"
         elif payload["model"].startswith("mk/") or payload["model"] in MARKETKU_MODELS:
             provider = "marketku"
+        elif payload["model"].startswith("at/") or payload["model"] in ATOMESUS_MODELS:
+            provider = "atomesus"
         elif payload["model"].startswith("kc/") or payload["model"] in KIMCHI_MODELS:
             provider = "kc"
 
-    for prefix in ("kc/", "cv/", "bm/", "nry/", "dh/", "qc/", "mk/"):
+    for prefix in ("kc/", "cv/", "bm/", "nry/", "dh/", "qc/", "mk/", "at/"):
         if payload.get("model", "").startswith(prefix):
             payload["model"] = payload["model"][len(prefix):]
             break
@@ -140,6 +202,9 @@ async def messages(request: Request):
     elif provider == "marketku":
         upstream_base_url = MARKETKU_BASE_URL
         log_model = f"mk/{payload['model']}"
+    elif provider == "atomesus":
+        upstream_base_url = ATOMESUS_BASE_URL
+        log_model = f"at/{payload['model']}"
     else:
         upstream_base_url = DEFAULT_UPSTREAM_URL
         log_model = f"kc/{payload['model']}"
@@ -169,6 +234,8 @@ async def messages(request: Request):
         api_keys_to_use = QC_API_KEYS
     elif provider == "marketku":
         api_keys_to_use = MARKETKU_API_KEYS
+    elif provider == "atomesus":
+        api_keys_to_use = ATOMESUS_API_KEYS
     else:
         api_keys_to_use = API_KEYS
 
@@ -181,6 +248,55 @@ async def messages(request: Request):
             return JSONResponse(status_code=500, content={"error": "No upstream API keys available"})
 
     requested_qc_model = payload.get("model") if provider == "qc" else None
+    is_qwen_image = provider == "qc" and "image" in payload.get("model", "").lower()
+
+    if is_qwen_image:
+        image_endpoint = "https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+        image_request = _qwen_image_request(payload)
+        last_status = 500
+        last_error = {"error": {"message": "Image generation failed"}}
+
+        for _ in range(len(QC_API_KEYS)):
+            current_key = get_current_qc_key_for_model(requested_qc_model)
+            start_req_time = time.time()
+            async with httpx.AsyncClient(timeout=300) as client:
+                resp = await client.post(
+                    image_endpoint,
+                    headers={
+                        "Authorization": f"Bearer {current_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=image_request,
+                )
+
+            try:
+                data = resp.json()
+            except Exception:
+                data = {"error": {"message": resp.text or f"HTTP {resp.status_code}"}}
+
+            if resp.status_code == 200:
+                result = _qwen_image_response(data, log_model, msg_id)
+                total_ms = int((time.time() - start_req_time) * 1000)
+                add_request_log(log_model, 200, current_key, False, total_ms, input_tokens, 0)
+                await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
+                await sse_broadcaster.broadcast("status", await _build_status_dict())
+                return JSONResponse(result)
+
+            last_status = resp.status_code
+            message = data.get("message") or data.get("error", {}).get("message") or f"HTTP {resp.status_code}"
+            last_error = {"error": {"message": message}}
+            add_request_log(
+                log_model,
+                resp.status_code,
+                current_key,
+                True,
+                int((time.time() - start_req_time) * 1000),
+            )
+            if resp.status_code in (401, 402, 403, 429) and rotate_qc_key_for_model(requested_qc_model):
+                continue
+            break
+
+        return JSONResponse(status_code=last_status, content=last_error)
 
     if upstream_req.get("stream"):
         async def generate():
@@ -211,6 +327,8 @@ async def messages(request: Request):
                         current_key = get_current_qc_key_for_model(requested_qc_model)
                     elif provider == "marketku":
                         current_key = get_current_marketku_key()
+                    elif provider == "atomesus":
+                        current_key = get_current_atomesus_key()
                     else:
                         current_key = get_current_key()
 
@@ -282,6 +400,8 @@ async def messages(request: Request):
                                         rotate_qc_key()
                                     elif provider == "marketku":
                                         rotate_marketku_key()
+                                    elif provider == "atomesus":
+                                        rotate_atomesus_key()
                                     last_error_status = resp.status_code
                                     last_error_content = err_data or {"error": f"HTTP {resp.status_code} error"}
                                     await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -365,6 +485,8 @@ async def messages(request: Request):
                                 rotate_qc_key()
                             elif provider == "marketku":
                                 rotate_marketku_key()
+                            elif provider == "atomesus":
+                                rotate_atomesus_key()
                             last_error_status = 500
                             last_error_content = {"error": str(e)}
                             await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -409,6 +531,8 @@ async def messages(request: Request):
                 current_key = get_current_qc_key_for_model(requested_qc_model)
             elif provider == "marketku":
                 current_key = get_current_marketku_key()
+            elif provider == "atomesus":
+                current_key = get_current_atomesus_key()
             else:
                 current_key = get_current_key()
 
@@ -477,6 +601,10 @@ async def messages(request: Request):
                         rotate_dahl_key()
                     elif provider == "qc":
                         rotate_qc_key()
+                    elif provider == "marketku":
+                        rotate_marketku_key()
+                    elif provider == "atomesus":
+                        rotate_atomesus_key()
                     last_error_status = resp.status_code
                     last_error_content = err_json or {"error": resp.text}
                     await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -512,6 +640,10 @@ async def messages(request: Request):
                     elif provider == "qc":
                         # Per-model slow rotation: move to next key for this model
                         rotate_qc_key_for_model(requested_qc_model)
+                    elif provider == "marketku":
+                        rotate_marketku_key()
+                    elif provider == "atomesus":
+                        rotate_atomesus_key()
                     # Dahl upstream is inherently slow; don't rotate on slow total time
                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                 await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -551,6 +683,10 @@ async def messages(request: Request):
                     rotate_dahl_key()
                 elif provider == "qc":
                     rotate_qc_key()
+                elif provider == "marketku":
+                    rotate_marketku_key()
+                elif provider == "atomesus":
+                    rotate_atomesus_key()
                 last_error_status = 500
                 last_error_content = {"error": str(e)}
                 await sse_broadcaster.broadcast("status", await _build_status_dict())
