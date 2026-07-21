@@ -133,7 +133,7 @@ def _bg(coro):
 
 
 async def init_state_from_db():
-    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, key_statuses, total_requests, failover_count, current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index, START_TIME
+    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, key_statuses, total_requests, total_tokens, failover_count, current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index, START_TIME
 
     API_KEYS.clear()
     CV_API_KEYS.clear()
