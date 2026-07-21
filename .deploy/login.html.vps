@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Sign In — Iyan Router{% endblock %}
+
+{% block content %}
+<div class="min-h-screen flex items-center justify-center bg-background p-4"
+     x-data="{
+       username: '',
+       password: '',
+       error: '',
+       loading: false,
+       async login() {
+         this.loading = true;
+         this.error = '';
+         try {
+           const res = await fetch('/api/login', {
+             method: 'POST',
+             headers: { 'Content-Type': 'application/json' },
+             body: JSON.stringify({ username: this.username, password: this.password })
+           });
+           if (res.ok) {
+             window.location.href = '/dashboard';
+           } else {
+             this.error = 'Invalid credentials. Please try again.';
+           }
+         } catch {
+           this.error = 'Network error. Please try again.';
+         } finally {
+           this.loading = false;
+         }
+       }
+     }"
+     @keydown.enter="login()">
+
+  <!-- Decorative background -->
+  <div class="fixed inset-0 pointer-events-none overflow-hidden">
+    <div class="absolute -top-1/2 -right-1/2 w-[800px] h-[800px] rounded-full bg-gradient-to-br from-primary/[0.04] to-transparent blur-3xl"></div>
+    <div class="absolute -bottom-1/2 -left-1/2 w-[600px] h-[600px] rounded-full bg-gradient-to-tr from-accent/[0.04] to-transparent blur-3xl"></div>
+  </div>
+
+  <!-- Card -->
+  <div class="relative w-full max-w-[380px]">
+    <div class="bg-card/80 backdrop-blur-xl border border-border rounded-xl shadow-xl shadow-black/[0.03]">
+      <div class="p-8 flex flex-col gap-6">
+
+        <!-- Brand -->
+        <div class="flex flex-col items-center gap-3">
+          <div class="w-11 h-11 rounded-lg bg-secondary border border-border flex items-center justify-center text-primary shadow-sm">
+            <i data-lucide="network" class="w-5 h-5"></i>
+          </div>
+          <div class="text-center">
+            <h1 class="font-display text-xl font-bold tracking-widest uppercase text-foreground">
+              Iyan <span class="text-primary">Router</span>
+            </h1>
+            <p class="text-xs text-muted-foreground tracking-wider uppercase mt-1">API Proxy Dashboard</p>
+          </div>
+        </div>
+
+        <!-- Form -->
+        <form class="flex flex-col gap-4" @submit.prevent="login()" novalidate>
+          <div class="space-y-1.5">
+            <label class="text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em]">Username</label>
+            <input type="text" x-model="username" placeholder="Enter username" autocomplete="username"
+                   class="w-full bg-input border border-border text-foreground rounded-md px-3 py-2.5 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-all font-body">
+          </div>
+          <div class="space-y-1.5">
+            <label class="text-[10px] font-semibold text-muted-foreground uppercase tracking-[0.08em]">Password</label>
+            <input type="password" x-model="password" placeholder="Enter password" autocomplete="current-password"
+                   class="w-full bg-input border border-border text-foreground rounded-md px-3 py-2.5 text-sm placeholder:text-muted-foreground/50 focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent transition-all font-body">
+          </div>
+
+          <!-- Error -->
+          <div x-show="error" x-transition
+               class="bg-destructive/10 border border-destructive/20 text-destructive text-sm px-3 py-2.5 rounded-md text-center"
+               x-text="error"></div>
+
+          <button type="submit"
+                  class="w-full bg-primary text-primary-foreground font-semibold py-2.5 rounded-md text-sm hover:opacity-90 active:opacity-80 transition-all focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:ring-offset-background disabled:opacity-50 disabled:cursor-not-allowed"
+                  :disabled="loading || !username || !password">
+            <span x-show="!loading">Sign In</span>
+            <span x-show="loading" class="flex items-center justify-center gap-2">
+              <i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>
+              Signing in...
+            </span>
+          </button>
+        </form>
+
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

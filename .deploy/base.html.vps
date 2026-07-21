@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en" x-data="{ dark: true }" :class="dark ? 'dark' : ''">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Iyan Router{% endblock %}</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            background: 'hsl(var(--background))',
+            foreground: 'hsl(var(--foreground))',
+            card: 'hsl(var(--card))',
+            'card-foreground': 'hsl(var(--card-foreground))',
+            primary: 'hsl(var(--primary))',
+            'primary-foreground': 'hsl(var(--primary-foreground))',
+            secondary: 'hsl(var(--secondary))',
+            'secondary-foreground': 'hsl(var(--secondary-foreground))',
+            muted: 'hsl(var(--muted))',
+            'muted-foreground': 'hsl(var(--muted-foreground))',
+            accent: 'hsl(var(--accent))',
+            'accent-foreground': 'hsl(var(--accent-foreground))',
+            destructive: 'hsl(var(--destructive))',
+            'destructive-foreground': 'hsl(var(--destructive-foreground))',
+            border: 'hsl(var(--border))',
+            input: 'hsl(var(--input))',
+            ring: 'hsl(var(--ring))',
+          },
+          fontFamily: {
+            display: ['"Syne"', 'sans-serif'],
+            body: ['"Outfit"', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'monospace'],
+          },
+          borderRadius: {
+            lg: 'var(--radius)',
+            md: 'calc(var(--radius) - 2px)',
+            sm: 'calc(var(--radius) - 4px)',
+          }
+        }
+      }
+    }
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Syne:wght@600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    :root {
+      --background: 0 0% 98%;
+      --foreground: 0 0% 8%;
+      --card: 0 0% 100%;
+      --card-foreground: 0 0% 8%;
+      --primary: 17 85% 55%;
+      --primary-foreground: 0 0% 100%;
+      --secondary: 0 0% 93%;
+      --secondary-foreground: 0 0% 8%;
+      --muted: 0 0% 93%;
+      --muted-foreground: 0 0% 44%;
+      --accent: 158 50% 38%;
+      --accent-foreground: 0 0% 100%;
+      --destructive: 0 72% 51%;
+      --destructive-foreground: 0 0% 100%;
+      --border: 0 0% 88%;
+      --input: 0 0% 88%;
+      --ring: 17 85% 55%;
+      --radius: 0.875rem;
+    }
+
+    .dark {
+      --background: 0 0% 8%;
+      --foreground: 0 0% 92%;
+      --card: 0 0% 7%;
+      --card-foreground: 0 0% 92%;
+      --primary: 17 85% 55%;
+      --primary-foreground: 0 0% 4%;
+      --secondary: 0 0% 11%;
+      --secondary-foreground: 0 0% 92%;
+      --muted: 0 0% 11%;
+      --muted-foreground: 0 0% 42%;
+      --accent: 158 50% 38%;
+      --accent-foreground: 0 0% 4%;
+      --destructive: 0 72% 51%;
+      --destructive-foreground: 0 0% 100%;
+      --border: 0 0% 15%;
+      --input: 0 0% 11%;
+      --ring: 17 85% 55%;
+    }
+
+    /* Animatable CSS custom properties for glow position */
+    @property --glow-x {
+      syntax: '<percentage>';
+      initial-value: 25%;
+      inherits: false;
+    }
+    @property --glow-y {
+      syntax: '<percentage>';
+      initial-value: 20%;
+      inherits: false;
+    }
+
+    /* Plus/cross grid + animated glowing spotlight */
+    body, .grid-bg {
+      background-image:
+        radial-gradient(ellipse 85% 70% at var(--glow-x) var(--glow-y), rgba(232,112,64,0.28) 0%, rgba(232,112,64,0.08) 35%, transparent 70%),
+        linear-gradient(currentColor 1.2px, transparent 1.2px),
+        linear-gradient(90deg, currentColor 1.2px, transparent 1.2px);
+      background-size: auto, 52px 52px, 52px 52px;
+      background-position: 0 0, 26px 26px, 26px 26px;
+      color: rgba(255,255,255,0.32);
+      animation: glow-drift 20s ease-in-out infinite;
+    }
+
+    html:not(.dark) body,
+    html:not(.dark) .grid-bg {
+      color: rgba(0,0,0,0.20);
+      background-image:
+        radial-gradient(ellipse 85% 70% at var(--glow-x) var(--glow-y), rgba(232,112,64,0.18) 0%, rgba(232,112,64,0.05) 35%, transparent 70%),
+        linear-gradient(currentColor 1.2px, transparent 1.2px),
+        linear-gradient(90deg, currentColor 1.2px, transparent 1.2px);
+    }
+
+    @keyframes glow-drift {
+      0%   { --glow-x: 22%; --glow-y: 18%; }
+      25%  { --glow-x: 80%; --glow-y: 14%; }
+      50%  { --glow-x: 68%; --glow-y: 76%; }
+      75%  { --glow-x: 14%; --glow-y: 62%; }
+      100% { --glow-x: 22%; --glow-y: 18%; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      body, .grid-bg { animation: none; }
+    }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: hsl(var(--border)); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: hsl(var(--muted-foreground)); }
+
+    @keyframes shimmer {
+      0% { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    .animate-shimmer {
+      background: linear-gradient(90deg, hsl(var(--secondary)) 25%, hsl(var(--muted)) 50%, hsl(var(--secondary)) 75%);
+      background-size: 200% 100%;
+      animation: shimmer 1.5s infinite;
+    }
+
+    @keyframes toast-in {
+      from { transform: translateX(110%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    .toast-enter {
+      animation: toast-in 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    @keyframes pulse-dot {
+      0% { transform: scale(1); opacity: 0.8; }
+      100% { transform: scale(3); opacity: 0; }
+    }
+    .pulse-ring::after {
+      content: '';
+      position: absolute; inset: 0; border-radius: 50%;
+      background: inherit;
+      animation: pulse-dot 2s ease-out infinite;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .animate-shimmer { animation: none; background: hsl(var(--secondary)); }
+      .pulse-ring::after { animation: none; }
+    }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-background text-foreground font-body antialiased">
+  {% block content %}{% endblock %}
+
+  <script>lucide.createIcons();</script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
