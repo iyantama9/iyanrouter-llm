@@ -10,7 +10,7 @@ import httpx
 import app.config as config_module
 from app.config import (
     CAVOTI_BASE_URL, BLUESMINDS_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL, ROUTER_PASSWORD,
-    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS_SHORT, QWEN_CLOUD_MODELS,
+    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS_SHORT, QWEN_CLOUD_MODELS, MARKETKU_MODELS, ATOMESUS_MODELS, WEIZE_MODELS,
     recent_requests,
     add_api_key, remove_api_key, reset_key_status, get_masked_keys, set_active_key,
     SESSION_SECRET, ADMIN_USERNAME, verify_admin_password, get_paginated_logs,
@@ -142,6 +142,8 @@ async def add_key_endpoint(payload: dict = Body(...), user: None = Depends(requi
         key_type = "nry"
     elif key_type == "auto" and key.startswith("dahl_"):
         key_type = "dahl"
+    elif key_type == "auto" and key.startswith("wzr_"):
+        key_type = "weize"
     elif key_type == "auto" and key.startswith("sk-"):
         async with httpx.AsyncClient() as client:
             try:
@@ -174,6 +176,9 @@ async def add_key_endpoint(payload: dict = Body(...), user: None = Depends(requi
                         key_type = "qc"
                 except Exception:
                     pass
+
+    if key_type == "auto" and key.startswith("atms_"):
+        key_type = "atomesus"
 
     success, msg = add_api_key(key, key_type)
     if success:
@@ -218,6 +223,9 @@ async def api_get_models(user: None = Depends(require_auth)):
         "bynara": [f"nry/{m}" for m in NARA_MODELS],
         "dahl": [f"dh/{m}" for m in DAHL_MODELS_SHORT],
         "qwen_cloud": [f"qc/{m}" for m in QWEN_CLOUD_MODELS],
+        "marketku": [f"mk/{m}" for m in MARKETKU_MODELS],
+        "atomesus": [f"at/{m}" for m in ATOMESUS_MODELS],
+        "weize": WEIZE_MODELS,
     }
 
 

@@ -1,9 +1,27 @@
+# Environment and secrets
 .env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Python
 .venv/
 venv/
-.vscode/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
 
 # Local AI/IDE configuration
 .claude/
@@ -14,8 +32,38 @@ __pycache__/
 settings.json
 settings.local.json
 
-# Documentation and planning files (local only)
+# Database exports and backups
+neon_export.json
+neon_backup.sql
+*.sql
+*.db
+*.sqlite
+*.sqlite3
+
+# Deployment artifacts
+*.tar.gz
+*.zip
+deploy-*.sh
+import_*.py
+export_*.py
+
+# Docker volumes
+postgres-data/
+ssl/
+
+# Documentation and planning (local only)
 docs/
+*.md.local
+RESUME_CHECKLIST.md
+DEPLOYMENT_*.md
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Added by code-review-graph
 .code-review-graph/

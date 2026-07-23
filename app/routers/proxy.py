@@ -11,9 +11,9 @@ import httpx
 import app.config as config_module
 from app.config import (
     DEFAULT_UPSTREAM_URL, CAVOTI_API_KEY, CAVOTI_BASE_URL, BLUESMINDS_API_KEY, BLUESMINDS_BASE_URL,
-    ROUTER_PASSWORD, get_current_key, rotate_key, API_KEYS, NARA_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL, ATOMESUS_BASE_URL,
-    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS, DAHL_MODELS_SHORT, resolve_dahl_model, QWEN_CLOUD_MODELS, MARKETKU_MODELS, ATOMESUS_MODELS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS,
-    get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key, get_current_dahl_key, rotate_dahl_key, get_current_qc_key, rotate_qc_key, get_current_marketku_key, rotate_marketku_key, get_current_atomesus_key, rotate_atomesus_key,
+    ROUTER_PASSWORD, get_current_key, rotate_key, API_KEYS, NARA_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL, ATOMESUS_BASE_URL, WEIZE_BASE_URL,
+    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS, DAHL_MODELS_SHORT, resolve_dahl_model, QWEN_CLOUD_MODELS, MARKETKU_MODELS, ATOMESUS_MODELS, WEIZE_MODELS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS, WEIZE_API_KEYS,
+    get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key, get_current_dahl_key, rotate_dahl_key, get_current_qc_key, rotate_qc_key, get_current_marketku_key, rotate_marketku_key, get_current_atomesus_key, rotate_atomesus_key, get_current_weize_key, rotate_weize_key,
     get_current_qc_key_for_model, rotate_qc_key_for_model, mark_qc_model_exhausted, QC_FALLBACK_ORDER,
     recent_requests, add_request_log,
 )
@@ -55,6 +55,8 @@ def _check_router_auth(request: Request):
 
 def _qwen_image_request(payload: dict) -> dict:
     prompt = ""
+    image_urls = []
+
     for message in reversed(payload.get("messages", [])):
         if message.get("role") != "user":
             continue
@@ -62,12 +64,32 @@ def _qwen_image_request(payload: dict) -> dict:
         if isinstance(content, str):
             prompt = content
         elif isinstance(content, list):
-            prompt = "\n".join(
-                block.get("text", "")
-                for block in content
-                if isinstance(block, dict) and block.get("text")
-            )
+            text_parts = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                if block.get("text"):
+                    text_parts.append(block["text"])
+                elif block.get("type") == "text" and block.get("text"):
+                    text_parts.append(block["text"])
+                elif block.get("type") == "image" and isinstance(block.get("source"), dict):
+                    source = block["source"]
+                    if source.get("type") == "url" and source.get("url"):
+                        image_urls.append(source["url"])
+                    elif source.get("type") == "base64" and source.get("data"):
+                        media_type = source.get("media_type", "image/png")
+                        image_urls.append(f"data:{media_type};base64,{source['data']}")
+                elif block.get("type") == "image_url":
+                    url = block.get("image_url", {}).get("url")
+                    if url:
+                        image_urls.append(url)
+                elif block.get("image"):
+                    image_urls.append(block["image"])
+            prompt = "\n".join(text_parts)
         break
+
+    content = [{"image": url} for url in image_urls]
+    content.append({"text": prompt or ("Edit this image" if image_urls else "Generate an image")})
 
     return {
         "model": payload["model"],
@@ -75,7 +97,7 @@ def _qwen_image_request(payload: dict) -> dict:
             "messages": [
                 {
                     "role": "user",
-                    "content": [{"text": prompt or "Generate an image"}],
+                    "content": content,
                 }
             ]
         },
@@ -132,6 +154,8 @@ async def list_models(request: Request):
         models.append(f"mk/{m}")
     for m in ATOMESUS_MODELS:
         models.append(f"at/{m}")
+    for m in WEIZE_MODELS:
+        models.append(m)
 
     data = []
     for m in models:
@@ -173,6 +197,8 @@ async def messages(request: Request):
             provider = "marketku"
         elif payload["model"].startswith("at/") or payload["model"] in ATOMESUS_MODELS:
             provider = "atomesus"
+        elif payload["model"].startswith("wz/") or payload["model"] in WEIZE_MODELS:
+            provider = "weize"
         elif payload["model"].startswith("kc/") or payload["model"] in KIMCHI_MODELS:
             provider = "kc"
 
@@ -205,6 +231,9 @@ async def messages(request: Request):
     elif provider == "atomesus":
         upstream_base_url = ATOMESUS_BASE_URL
         log_model = f"at/{payload['model']}"
+    elif provider == "weize":
+        upstream_base_url = WEIZE_BASE_URL
+        log_model = payload['model']
     else:
         upstream_base_url = DEFAULT_UPSTREAM_URL
         log_model = f"kc/{payload['model']}"
@@ -236,6 +265,8 @@ async def messages(request: Request):
         api_keys_to_use = MARKETKU_API_KEYS
     elif provider == "atomesus":
         api_keys_to_use = ATOMESUS_API_KEYS
+    elif provider == "weize":
+        api_keys_to_use = WEIZE_API_KEYS
     else:
         api_keys_to_use = API_KEYS
 
@@ -329,6 +360,8 @@ async def messages(request: Request):
                         current_key = get_current_marketku_key()
                     elif provider == "atomesus":
                         current_key = get_current_atomesus_key()
+                    elif provider == "weize":
+                        current_key = get_current_weize_key()
                     else:
                         current_key = get_current_key()
 
@@ -402,6 +435,8 @@ async def messages(request: Request):
                                         rotate_marketku_key()
                                     elif provider == "atomesus":
                                         rotate_atomesus_key()
+                                    elif provider == "weize":
+                                        rotate_weize_key()
                                     last_error_status = resp.status_code
                                     last_error_content = err_data or {"error": f"HTTP {resp.status_code} error"}
                                     await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -487,6 +522,8 @@ async def messages(request: Request):
                                 rotate_marketku_key()
                             elif provider == "atomesus":
                                 rotate_atomesus_key()
+                            elif provider == "weize":
+                                rotate_weize_key()
                             last_error_status = 500
                             last_error_content = {"error": str(e)}
                             await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -533,6 +570,8 @@ async def messages(request: Request):
                 current_key = get_current_marketku_key()
             elif provider == "atomesus":
                 current_key = get_current_atomesus_key()
+            elif provider == "weize":
+                current_key = get_current_weize_key()
             else:
                 current_key = get_current_key()
 
@@ -605,6 +644,8 @@ async def messages(request: Request):
                         rotate_marketku_key()
                     elif provider == "atomesus":
                         rotate_atomesus_key()
+                    elif provider == "weize":
+                        rotate_weize_key()
                     last_error_status = resp.status_code
                     last_error_content = err_json or {"error": resp.text}
                     await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -644,6 +685,8 @@ async def messages(request: Request):
                         rotate_marketku_key()
                     elif provider == "atomesus":
                         rotate_atomesus_key()
+                    elif provider == "weize":
+                        rotate_weize_key()
                     # Dahl upstream is inherently slow; don't rotate on slow total time
                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                 await sse_broadcaster.broadcast("status", await _build_status_dict())
