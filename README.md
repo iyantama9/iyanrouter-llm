@@ -392,8 +392,6 @@ netstat -tulpn | grep :4000
 ## 👤 Author
 
 **Iyan Tama**
-- Production Server: `root@178.128.59.20`
-- Domain: `routers.iyantama.tech`
 
 ---
 
