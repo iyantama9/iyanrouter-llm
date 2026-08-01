@@ -144,6 +144,8 @@ async def list_models(request: Request):
         models.append(f"kc/{m}")
     for m in CAVOTI_MODELS:
         models.append(f"cv/{m}")
+    for m in BLUESMINDS_MODELS:
+        models.append(f"bm/{m}")
     for m in NARA_MODELS:
         models.append(f"nry/{m}")
     for m in DAHL_MODELS:
@@ -155,7 +157,7 @@ async def list_models(request: Request):
     for m in ATOMESUS_MODELS:
         models.append(f"at/{m}")
     for m in WEIZE_MODELS:
-        models.append(m)
+        models.append(f"wz/{m}")
 
     data = []
     for m in models:

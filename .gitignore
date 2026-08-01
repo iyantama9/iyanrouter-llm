@@ -51,6 +51,10 @@ export_*.py
 postgres-data/
 ssl/
 
+# Claude Max Bridges (contains auth tokens)
+claude-max-bridges/bridge-*/
+!claude-max-bridges/bridge-template/
+
 # Documentation and planning (local only)
 docs/
 *.md.local
