@@ -274,7 +274,6 @@ async def messages(request: Request):
                     content_str = row["content"]
                     # Try to parse JSON content (for assistant messages)
                     try:
-                        import json
                         content = json.loads(content_str)
                         if isinstance(content, list):
                             # Anthropic format content blocks - flatten to text
