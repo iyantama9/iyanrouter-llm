@@ -163,7 +163,7 @@ def normalize_for_qwen(messages):
     return normalized
 
 
-def build_openai_request(body, provider="kc"):
+def build_openai_request(body, provider="kc", session_history=None):
     claude_model = body.get("model", "")
 
     if provider in ("bm", "cv", "dahl", "nry", "qc", "marketku", "atomesus", "weize"):
@@ -182,6 +182,16 @@ def build_openai_request(body, provider="kc"):
             openai_model = claude_model if claude_model in config.KIMCHI_MODELS else fallback
 
     messages = to_openai_messages(body)
+
+    # Inject session history if provided
+    if session_history:
+        # Separate system messages from conversation
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        conversation = [m for m in messages if m.get("role") != "system"]
+
+        # Build: system + history + current conversation
+        messages = system_msgs + session_history + conversation
+
     is_qwen_image = provider == "qc" and "image" in openai_model.lower()
 
     if is_qwen_image:

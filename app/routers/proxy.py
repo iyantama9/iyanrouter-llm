@@ -183,6 +183,11 @@ async def messages(request: Request):
         return JSONResponse(status_code=401, content={"error": {"message": "Invalid router password."}})
 
     payload = await request.json()
+
+    # Conversation Memory: Extract session headers
+    enable_memory = request.headers.get("X-Enable-Memory", "false").lower() == "true"
+    session_id_header = request.headers.get("X-Session-Id")
+
     provider = "kc"
     if payload.get("model"):
         if payload["model"].startswith("cv/") or payload["model"] in CAVOTI_MODELS:
@@ -211,6 +216,77 @@ async def messages(request: Request):
 
     if provider == "dahl":
         payload["model"] = resolve_dahl_model(payload["model"])
+
+    # Conversation Memory: Auto-generate session ID if not provided (hybrid approach)
+    session_id = None
+    session_history = None
+    current_key = ""
+
+    if enable_memory:
+        # Determine which key pool to use for session identification
+        if provider == "cv":
+            current_key = get_current_cv_key() if CV_API_KEYS else CAVOTI_API_KEY or ""
+        elif provider == "bm":
+            current_key = get_current_bm_key() if BM_API_KEYS else BLUESMINDS_API_KEY or ""
+        elif provider == "nry":
+            current_key = get_current_nr_key() if NR_API_KEYS else ""
+        elif provider == "dahl":
+            current_key = get_current_dahl_key() if DAHL_API_KEYS else ""
+        elif provider == "qc":
+            current_key = get_current_qc_key() if QC_API_KEYS else ""
+        elif provider == "marketku":
+            current_key = get_current_marketku_key() if MARKETKU_API_KEYS else ""
+        elif provider == "atomesus":
+            current_key = get_current_atomesus_key() if ATOMESUS_API_KEYS else ""
+        elif provider == "weize":
+            current_key = get_current_weize_key() if WEIZE_API_KEYS else ""
+        else:
+            current_key = get_current_key() if API_KEYS else ""
+
+        if not session_id_header:
+            # Auto-generate from hash(api_key + first_user_message)
+            first_user = next((m for m in payload.get("messages", []) if m.get("role") == "user"), None)
+            if first_user:
+                import hashlib
+                content_preview = str(first_user.get("content", ""))[:50]
+                session_id_header = hashlib.md5(
+                    f"{current_key}:{content_preview}".encode()
+                ).hexdigest()[:16]
+
+        if session_id_header and current_key:
+            # Get or create session
+            import hashlib
+            from app.database import get_or_create_session, load_session_history
+            api_key_hash = hashlib.sha256(current_key.encode()).hexdigest()
+            session_id = await get_or_create_session(
+                identifier=session_id_header,
+                api_key_hash=api_key_hash,
+                model=payload.get("model")
+            )
+
+            # Load history
+            history_rows = await load_session_history(session_id, limit=config_module.MAX_HISTORY_MESSAGES)
+            if history_rows:
+                # Convert to OpenAI message format
+                session_history = []
+                for row in history_rows:
+                    role = row["role"]
+                    content_str = row["content"]
+                    # Try to parse JSON content (for assistant messages)
+                    try:
+                        import json
+                        content = json.loads(content_str)
+                        if isinstance(content, list):
+                            # Anthropic format content blocks - flatten to text
+                            text_parts = []
+                            for block in content:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    text_parts.append(block.get("text", ""))
+                            content_str = "\n".join(text_parts) if text_parts else content_str
+                    except Exception:
+                        pass
+
+                    session_history.append({"role": role, "content": content_str})
 
     if provider == "cv":
         upstream_base_url = CAVOTI_BASE_URL
@@ -241,7 +317,7 @@ async def messages(request: Request):
         log_model = f"kc/{payload['model']}"
 
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
-    upstream_req = build_openai_request(payload, provider=provider)
+    upstream_req = build_openai_request(payload, provider=provider, session_history=session_history)
     upstream_endpoint = f"{upstream_base_url}/chat/completions"
 
     input_tokens = estimate_tokens(payload)
@@ -335,8 +411,13 @@ async def messages(request: Request):
         async def generate():
             nonlocal requested_qc_model
             nonlocal log_model
+            nonlocal session_id
+            nonlocal enable_memory
             last_error_status = 429
             last_error_content = {"error": {"message": "All configured API keys are rate limited or unauthorized."}}
+
+            # Conversation Memory: Accumulator for streaming response
+            accumulated_response = []
 
             for c_idx, compact_level in enumerate(compact_levels):
                 if compact_level is not None:
@@ -463,10 +544,78 @@ async def messages(request: Request):
                                     has_yielded = True
                                     if first_token_time is None:
                                         first_token_time = time.time()
+
+                                    # Accumulate response content for conversation memory
+                                    if enable_memory and session_id:
+                                        try:
+                                            # Parse SSE chunk to extract content
+                                            if chunk.startswith("event: content_block_start\ndata: "):
+                                                data_json = chunk.split("\ndata: ", 1)[1].strip()
+                                                data = json.loads(data_json)
+                                                if data.get("type") == "content_block_start":
+                                                    content_block = data.get("content_block", {})
+                                                    idx = data.get("index", len(accumulated_response))
+                                                    # Ensure list is large enough
+                                                    while len(accumulated_response) <= idx:
+                                                        accumulated_response.append(None)
+                                                    accumulated_response[idx] = content_block.copy()
+                                            elif chunk.startswith("event: content_block_delta\ndata: "):
+                                                data_json = chunk.split("\ndata: ", 1)[1].strip()
+                                                data = json.loads(data_json)
+                                                if data.get("type") == "content_block_delta":
+                                                    idx = data.get("index", 0)
+                                                    delta = data.get("delta", {})
+                                                    # Ensure block exists
+                                                    while len(accumulated_response) <= idx:
+                                                        accumulated_response.append(None)
+                                                    if accumulated_response[idx] is None:
+                                                        accumulated_response[idx] = {}
+
+                                                    # Append delta content
+                                                    if delta.get("type") == "text_delta":
+                                                        text = delta.get("text", "")
+                                                        if "text" not in accumulated_response[idx]:
+                                                            accumulated_response[idx]["type"] = "text"
+                                                            accumulated_response[idx]["text"] = ""
+                                                        accumulated_response[idx]["text"] += text
+                                                    elif delta.get("type") == "thinking_delta":
+                                                        thinking = delta.get("thinking", "")
+                                                        if "thinking" not in accumulated_response[idx]:
+                                                            accumulated_response[idx]["type"] = "thinking"
+                                                            accumulated_response[idx]["thinking"] = ""
+                                                        accumulated_response[idx]["thinking"] += thinking
+                                        except Exception:
+                                            pass  # Ignore parsing errors
+
                                     yield chunk
                                 total_ms = int((time.time() - start_req_time) * 1000)
                                 ttft_ms = int((first_token_time - start_req_time) * 1000) if first_token_time else total_ms
                                 add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, token_tracker["output_tokens"])
+
+                                # Conversation Memory: Save messages to session (streaming)
+                                if enable_memory and session_id:
+                                    from app.database import append_to_session
+                                    # Save user message
+                                    last_user_msg = payload.get("messages", [])[-1] if payload.get("messages") else None
+                                    if last_user_msg:
+                                        user_content = last_user_msg.get("content", "")
+                                        if isinstance(user_content, list):
+                                            # Flatten content blocks to text
+                                            text_parts = []
+                                            for block in user_content:
+                                                if isinstance(block, dict) and block.get("type") == "text":
+                                                    text_parts.append(block.get("text", ""))
+                                                elif isinstance(block, str):
+                                                    text_parts.append(block)
+                                            user_content = "\n".join(text_parts)
+                                        await append_to_session(session_id, "user", str(user_content))
+
+                                    # Save accumulated assistant response
+                                    # Filter out None entries and save as JSON
+                                    final_response = [block for block in accumulated_response if block is not None]
+                                    if final_response:
+                                        await append_to_session(session_id, "assistant", json.dumps(final_response))
+
                                 threshold = config_module.SLOW_RESPONSE_THRESHOLD_MS
                                 if threshold > 0 and ttft_ms > threshold and len(api_keys_to_use) > 1:
                                     print(f"[LOG] Slow TTFT {ttft_ms}ms > {threshold}ms, rotating {provider} key proactively")
@@ -669,6 +818,29 @@ async def messages(request: Request):
                 output_tokens = usage.get("output_tokens", 0)
                 total_ms = int((time.time() - start_req_time) * 1000)
                 add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, output_tokens)
+
+                # Conversation Memory: Save messages to session
+                if enable_memory and session_id:
+                    from app.database import append_to_session
+                    # Save user message
+                    last_user_msg = payload.get("messages", [])[-1] if payload.get("messages") else None
+                    if last_user_msg:
+                        user_content = last_user_msg.get("content", "")
+                        if isinstance(user_content, list):
+                            # Flatten content blocks to text
+                            text_parts = []
+                            for block in user_content:
+                                if isinstance(block, dict) and block.get("type") == "text":
+                                    text_parts.append(block.get("text", ""))
+                                elif isinstance(block, str):
+                                    text_parts.append(block)
+                            user_content = "\n".join(text_parts)
+                        await append_to_session(session_id, "user", str(user_content))
+
+                    # Save assistant response
+                    assistant_content = anthropic_resp.get("content", [])
+                    await append_to_session(session_id, "assistant", json.dumps(assistant_content))
+
                 threshold = config_module.SLOW_RESPONSE_THRESHOLD_MS
                 if threshold > 0 and total_ms > threshold and len(api_keys_to_use) > 1:
                     print(f"[LOG] Slow response {total_ms}ms > {threshold}ms, rotating {provider} key proactively")

@@ -109,6 +109,21 @@ async def setup_tables():
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )
     """)
+    # ── Conversation Memory Extensions ──
+    await execute("""
+        ALTER TABLE chat_sessions
+        ADD COLUMN IF NOT EXISTS project_identifier VARCHAR(255),
+        ADD COLUMN IF NOT EXISTS api_key_hash VARCHAR(64),
+        ADD COLUMN IF NOT EXISTS last_model VARCHAR(100)
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_sessions_identifier
+        ON chat_sessions(project_identifier)
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_sessions_api_key
+        ON chat_sessions(api_key_hash)
+    """)
 
 # ── Chat Session Helpers ──
 async def get_chat_sessions():
@@ -132,3 +147,54 @@ async def get_chat_messages(session_id: int):
 async def save_chat_message(session_id: int, role: str, content: str):
     await execute("UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1", session_id)
     return await fetchrow("INSERT INTO chat_messages (session_id, role, content) VALUES ($1, $2, $3) RETURNING *", session_id, role, content)
+
+# ── Conversation Memory Helpers ──
+async def get_or_create_session(identifier: str, api_key_hash: str, model: str = None):
+    """Get existing session by identifier or create new one."""
+    # Try to find existing session
+    session = await fetchrow(
+        "SELECT id FROM chat_sessions WHERE project_identifier = $1 AND api_key_hash = $2",
+        identifier, api_key_hash
+    )
+    if session:
+        # Update last seen
+        if model:
+            await execute(
+                "UPDATE chat_sessions SET updated_at = NOW(), last_model = $1 WHERE id = $2",
+                model, session["id"]
+            )
+        else:
+            await execute("UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1", session["id"])
+        return session["id"]
+
+    # Create new session
+    name = f"Session {identifier[:8]}"
+    new_session = await fetchrow(
+        "INSERT INTO chat_sessions (name, project_identifier, api_key_hash, last_model) VALUES ($1, $2, $3, $4) RETURNING id",
+        name, identifier, api_key_hash, model
+    )
+    return new_session["id"]
+
+async def load_session_history(session_id: int, limit: int = 20):
+    """Load N most recent messages from a session in chronological order."""
+    messages = await fetch(
+        "SELECT role, content FROM chat_messages WHERE session_id = $1 ORDER BY id DESC LIMIT $2",
+        session_id, limit
+    )
+    # Reverse to get chronological order (oldest first)
+    return list(reversed(messages))
+
+async def append_to_session(session_id: int, role: str, content: str):
+    """Append a message to session history."""
+    await execute("UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1", session_id)
+    await execute(
+        "INSERT INTO chat_messages (session_id, role, content) VALUES ($1, $2, $3)",
+        session_id, role, content
+    )
+
+async def cleanup_old_sessions(retention_days: int = 30):
+    """Delete sessions older than retention_days."""
+    await execute(
+        "DELETE FROM chat_sessions WHERE updated_at < NOW() - INTERVAL '%s days'",
+        retention_days
+    )
