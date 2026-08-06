@@ -22,6 +22,8 @@ from app.translator import (
     is_context_window_error, to_anthropic_stream_error, estimate_tokens,
 )
 from app.sse import sse_broadcaster
+from app.brain.middleware import BrainMiddleware
+from app.brain.memory import MemoryManager
 
 
 router = APIRouter()
@@ -184,9 +186,31 @@ async def messages(request: Request):
 
     payload = await request.json()
 
+    # Brain: Always enabled for all users
+    enable_brain = True
+
     # Conversation Memory: Extract session headers
     enable_memory = request.headers.get("X-Enable-Memory", "false").lower() == "true"
     session_id_header = request.headers.get("X-Session-Id")
+
+    # Brain: Extract user message for context building
+    user_message_text = ""
+    last_user_msg = None
+    if enable_brain:
+        messages = payload.get("messages", [])
+        for msg in reversed(messages):
+            if msg.get("role") == "user":
+                last_user_msg = msg
+                content = msg.get("content", "")
+                if isinstance(content, str):
+                    user_message_text = content
+                elif isinstance(content, list):
+                    text_parts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                    user_message_text = "\n".join(text_parts)
+                break
 
     provider = "kc"
     if payload.get("model"):
@@ -217,10 +241,30 @@ async def messages(request: Request):
     if provider == "dahl":
         payload["model"] = resolve_dahl_model(payload["model"])
 
+    # Determine current API key for both memory and brain
+    current_key = ""
+    if provider == "cv":
+        current_key = get_current_cv_key() if CV_API_KEYS else CAVOTI_API_KEY or ""
+    elif provider == "bm":
+        current_key = get_current_bm_key() if BM_API_KEYS else BLUESMINDS_API_KEY or ""
+    elif provider == "nry":
+        current_key = get_current_nr_key() if NR_API_KEYS else ""
+    elif provider == "dahl":
+        current_key = get_current_dahl_key() if DAHL_API_KEYS else ""
+    elif provider == "qc":
+        current_key = get_current_qc_key() if QC_API_KEYS else ""
+    elif provider == "marketku":
+        current_key = get_current_marketku_key() if MARKETKU_API_KEYS else ""
+    elif provider == "atomesus":
+        current_key = get_current_atomesus_key() if ATOMESUS_API_KEYS else ""
+    elif provider == "weize":
+        current_key = get_current_weize_key() if WEIZE_API_KEYS else ""
+    else:
+        current_key = get_current_key() if API_KEYS else ""
+
     # Conversation Memory: Auto-generate session ID if not provided (hybrid approach)
     session_id = None
     session_history = None
-    current_key = ""
 
     if enable_memory:
         # Determine which key pool to use for session identification
@@ -286,6 +330,36 @@ async def messages(request: Request):
                         pass
 
                     session_history.append({"role": role, "content": content_str})
+
+    # Brain: Build context from brain memory
+    brain_context = None
+    api_key_hash_for_brain = None
+    if enable_brain and user_message_text:
+        # Extract API key for brain (use current_key or fall back to auth header)
+        auth_header = request.headers.get("Authorization", "")
+        x_api_key = request.headers.get("x-api-key", "")
+
+        brain_api_key = ""
+        if current_key:
+            brain_api_key = current_key
+        elif auth_header.startswith("Bearer "):
+            brain_api_key = auth_header[7:]
+        elif x_api_key:
+            brain_api_key = x_api_key
+
+        if brain_api_key:
+            from app.brain.middleware import BrainMiddleware
+            api_key_hash_for_brain = BrainMiddleware.get_api_key_hash(brain_api_key)
+            brain_context = await BrainMiddleware.build_brain_context(
+                api_key_hash=api_key_hash_for_brain,
+                user_message=user_message_text,
+                session_id=session_id,
+                enable_brain=enable_brain
+            )
+
+    # Brain: Inject brain context into payload
+    if brain_context:
+        payload = await BrainMiddleware.inject_brain_context(payload, brain_context)
 
     if provider == "cv":
         upstream_base_url = CAVOTI_BASE_URL
@@ -615,6 +689,35 @@ async def messages(request: Request):
                                     if final_response:
                                         await append_to_session(session_id, "assistant", json.dumps(final_response))
 
+                                # Brain: Save conversation to brain (streaming)
+                                if enable_brain and api_key_hash_for_brain and user_message_text:
+                                    from app.brain.middleware import BrainMiddleware
+                                    # Save user message
+                                    if session_id:
+                                        await BrainMiddleware.save_conversation_to_brain(
+                                            session_id=session_id,
+                                            api_key_hash=api_key_hash_for_brain,
+                                            message_id=1,  # Auto-incremented by storage
+                                            role="user",
+                                            content=user_message_text,
+                                            model=log_model
+                                        )
+                                    # Save assistant response
+                                    if accumulated_response:
+                                        assistant_text = ""
+                                        for block in accumulated_response:
+                                            if block and isinstance(block, dict) and block.get("type") == "text":
+                                                assistant_text += block.get("text", "")
+                                        if assistant_text and session_id:
+                                            await BrainMiddleware.save_conversation_to_brain(
+                                                session_id=session_id,
+                                                api_key_hash=api_key_hash_for_brain,
+                                                message_id=2,
+                                                role="assistant",
+                                                content=assistant_text,
+                                                model=log_model
+                                            )
+
                                 threshold = config_module.SLOW_RESPONSE_THRESHOLD_MS
                                 if threshold > 0 and ttft_ms > threshold and len(api_keys_to_use) > 1:
                                     print(f"[LOG] Slow TTFT {ttft_ms}ms > {threshold}ms, rotating {provider} key proactively")
@@ -839,6 +942,36 @@ async def messages(request: Request):
                     # Save assistant response
                     assistant_content = anthropic_resp.get("content", [])
                     await append_to_session(session_id, "assistant", json.dumps(assistant_content))
+
+                # Brain: Save conversation to brain (non-streaming)
+                if enable_brain and api_key_hash_for_brain and user_message_text:
+                    from app.brain.middleware import BrainMiddleware
+                    # Save user message
+                    if session_id:
+                        await BrainMiddleware.save_conversation_to_brain(
+                            session_id=session_id,
+                            api_key_hash=api_key_hash_for_brain,
+                            message_id=1,
+                            role="user",
+                            content=user_message_text,
+                            model=log_model
+                        )
+                    # Save assistant response
+                    assistant_content = anthropic_resp.get("content", [])
+                    if assistant_content and session_id:
+                        assistant_text = ""
+                        for block in assistant_content:
+                            if isinstance(block, dict) and block.get("type") == "text":
+                                assistant_text += block.get("text", "")
+                        if assistant_text:
+                            await BrainMiddleware.save_conversation_to_brain(
+                                session_id=session_id,
+                                api_key_hash=api_key_hash_for_brain,
+                                message_id=2,
+                                role="assistant",
+                                content=assistant_text,
+                                model=log_model
+                            )
 
                 threshold = config_module.SLOW_RESPONSE_THRESHOLD_MS
                 if threshold > 0 and total_ms > threshold and len(api_keys_to_use) > 1:

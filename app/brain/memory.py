@@ -1,0 +1,242 @@
+"""
+Memory Module - Enhanced memory tracking and context building
+
+Handles:
+- Conversation memory with embeddings
+- Context building for requests
+- Relevant memory retrieval
+"""
+
+import json
+from typing import List, Dict, Any, Optional
+from app.brain.storage import BrainStorage
+from app.brain.semantic import SemanticSearch
+from app.brain.embeddings import embed_text
+
+
+class MemoryManager:
+    """Manages conversation memory with semantic capabilities"""
+
+    @staticmethod
+    async def save_message(
+        session_id: int,
+        api_key_hash: str,
+        message_id: int,
+        role: str,
+        content: str,
+        model: str = None,
+        compute_embedding: bool = True
+    ):
+        """
+        Save a message to memory with optional embedding.
+
+        Args:
+            session_id: Chat session ID
+            api_key_hash: User's API key hash
+            message_id: Message ID from chat_messages table
+            role: Message role (user/assistant)
+            content: Message content
+            model: Model used (optional)
+            compute_embedding: Whether to compute and store embedding
+        """
+        # Extract text from content if it's JSON (Anthropic format)
+        text_content = MemoryManager._extract_text_from_content(content)
+
+        # Compute embedding if requested
+        embedding = None
+        if compute_embedding and text_content.strip():
+            embedding = embed_text(text_content)
+
+        # Save to database
+        await BrainStorage.save_conversation_embedding(
+            session_id=session_id,
+            api_key_hash=api_key_hash,
+            message_id=message_id,
+            role=role,
+            content=text_content,
+            embedding=embedding,
+            model=model
+        )
+
+    @staticmethod
+    def _extract_text_from_content(content: str) -> str:
+        """Extract plain text from message content (handles JSON format)"""
+        try:
+            # Try to parse as JSON (Anthropic format)
+            parsed = json.loads(content)
+            if isinstance(parsed, list):
+                # Content blocks format
+                text_parts = []
+                for block in parsed:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif block.get("type") == "thinking":
+                            # Include thinking for context
+                            text_parts.append(f"[Thinking: {block.get('thinking', '')}]")
+                return "\n".join(text_parts)
+            elif isinstance(parsed, dict):
+                # Single block
+                if parsed.get("type") == "text":
+                    return parsed.get("text", "")
+        except (json.JSONDecodeError, Exception):
+            pass
+
+        # Return as-is if not JSON or parsing failed
+        return content
+
+    @staticmethod
+    async def build_context(
+        api_key_hash: str,
+        current_message: str,
+        session_id: Optional[int] = None,
+        max_relevant: int = 5,
+        include_facts: bool = True,
+        include_decisions: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Build context for the current request from brain memory.
+
+        Args:
+            api_key_hash: User's API key hash
+            current_message: Current user message
+            session_id: Current session ID
+            max_relevant: Maximum relevant past conversations
+            include_facts: Include relevant facts
+            include_decisions: Include relevant decisions
+
+        Returns:
+            Dictionary with context data
+        """
+        context = {
+            "relevant_conversations": [],
+            "facts": [],
+            "decisions": []
+        }
+
+        # Find relevant past conversations
+        relevant = await SemanticSearch.find_related_conversations(
+            message=current_message,
+            api_key_hash=api_key_hash,
+            session_id=None,  # Search across all sessions for broader context
+            limit=max_relevant
+        )
+
+        # Filter out current session to avoid duplicates
+        if session_id:
+            relevant = [r for r in relevant if r.get("session_id") != session_id]
+
+        context["relevant_conversations"] = relevant[:max_relevant]
+
+        # Find relevant facts
+        if include_facts:
+            facts = await SemanticSearch.search_facts(
+                query=current_message,
+                api_key_hash=api_key_hash,
+                limit=5
+            )
+            context["facts"] = facts
+
+        # Find relevant decisions
+        if include_decisions:
+            decisions = await SemanticSearch.search_decisions(
+                query=current_message,
+                api_key_hash=api_key_hash,
+                limit=3
+            )
+            context["decisions"] = decisions
+
+        return context
+
+    @staticmethod
+    def format_context_for_injection(context: Dict[str, Any]) -> str:
+        """
+        Format brain context into a system message for injection.
+
+        Args:
+            context: Context dictionary from build_context()
+
+        Returns:
+            Formatted string for system message injection
+        """
+        parts = []
+
+        # Add relevant conversations
+        if context.get("relevant_conversations"):
+            parts.append("## Relevant Past Conversations")
+            for i, conv in enumerate(context["relevant_conversations"][:3], 1):
+                similarity = conv.get("similarity", 0)
+                content = conv.get("content", "")[:200]  # Truncate
+                parts.append(f"{i}. (similarity: {similarity:.2f}) {content}...")
+
+        # Add facts
+        if context.get("facts"):
+            parts.append("\n## Relevant Facts")
+            for fact in context["facts"][:5]:
+                fact_text = fact.get("fact", "")
+                confidence = fact.get("confidence", 1.0)
+                parts.append(f"- {fact_text} (confidence: {confidence:.2f})")
+
+        # Add decisions
+        if context.get("decisions"):
+            parts.append("\n## Past Decisions")
+            for decision in context["decisions"][:3]:
+                title = decision.get("title", "")
+                outcome = decision.get("outcome", "")
+                parts.append(f"- {title}")
+                if outcome:
+                    parts.append(f"  Outcome: {outcome}")
+
+        if not parts:
+            return ""
+
+        return "\n".join(parts)
+
+    @staticmethod
+    async def get_session_summary(
+        session_id: int,
+        api_key_hash: str,
+        max_messages: int = 50
+    ) -> Dict[str, Any]:
+        """
+        Get a summary of a session's memory.
+
+        Args:
+            session_id: Session ID
+            api_key_hash: User's API key hash
+            max_messages: Maximum messages to include
+
+        Returns:
+            Session summary with statistics
+        """
+        conversations = await BrainStorage.get_conversation_history(
+            api_key_hash=api_key_hash,
+            session_id=session_id,
+            limit=max_messages
+        )
+
+        # Count messages by role
+        user_count = sum(1 for c in conversations if c.get("role") == "user")
+        assistant_count = sum(1 for c in conversations if c.get("role") == "assistant")
+
+        # Get decisions for this session
+        decisions = await BrainStorage.get_decisions(
+            api_key_hash=api_key_hash,
+            session_id=session_id
+        )
+
+        # Get facts for this session
+        facts = await BrainStorage.get_facts(
+            api_key_hash=api_key_hash,
+            session_id=session_id
+        )
+
+        return {
+            "session_id": session_id,
+            "total_messages": len(conversations),
+            "user_messages": user_count,
+            "assistant_messages": assistant_count,
+            "decisions_count": len(decisions),
+            "facts_count": len(facts),
+            "conversations": conversations[:10]  # Return first 10
+        }

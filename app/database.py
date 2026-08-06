@@ -125,6 +125,94 @@ async def setup_tables():
         ON chat_sessions(api_key_hash)
     """)
 
+    # ── Brain Tables ──
+    await execute("""
+        CREATE TABLE IF NOT EXISTS brain_conversations (
+            id SERIAL PRIMARY KEY,
+            session_id INTEGER,
+            api_key_hash VARCHAR(64) NOT NULL,
+            message_id INTEGER NOT NULL,
+            role VARCHAR(50) NOT NULL,
+            content TEXT NOT NULL,
+            model VARCHAR(100),
+            embedding BYTEA,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_conv_session
+        ON brain_conversations(session_id)
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_conv_api_key
+        ON brain_conversations(api_key_hash)
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_conv_created
+        ON brain_conversations(created_at DESC)
+    """)
+
+    await execute("""
+        CREATE TABLE IF NOT EXISTS brain_decisions (
+            id SERIAL PRIMARY KEY,
+            api_key_hash VARCHAR(64) NOT NULL,
+            session_id INTEGER,
+            title VARCHAR(500) NOT NULL,
+            description TEXT,
+            context TEXT,
+            outcome TEXT,
+            decision_type VARCHAR(100),
+            embedding BYTEA,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_decisions_api_key
+        ON brain_decisions(api_key_hash)
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_decisions_session
+        ON brain_decisions(session_id)
+    """)
+
+    await execute("""
+        CREATE TABLE IF NOT EXISTS brain_facts (
+            id SERIAL PRIMARY KEY,
+            api_key_hash VARCHAR(64) NOT NULL,
+            session_id INTEGER,
+            fact TEXT NOT NULL,
+            category VARCHAR(100),
+            source VARCHAR(200),
+            confidence FLOAT DEFAULT 1.0,
+            embedding BYTEA,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_facts_api_key
+        ON brain_facts(api_key_hash)
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_facts_category
+        ON brain_facts(category)
+    """)
+
+    await execute("""
+        CREATE TABLE IF NOT EXISTS brain_profiles (
+            id SERIAL PRIMARY KEY,
+            api_key_hash VARCHAR(64) NOT NULL UNIQUE,
+            profile_data JSONB,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_profiles_api_key
+        ON brain_profiles(api_key_hash)
+    """)
+
+
 # ── Chat Session Helpers ──
 async def get_chat_sessions():
     return await fetch("SELECT * FROM chat_sessions ORDER BY updated_at DESC")

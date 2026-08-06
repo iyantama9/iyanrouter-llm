@@ -21,7 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from app.database import init_db, close_db
 from app.config import init_state_from_db, auto_reset_limited_keys, PORT, SSL_KEYFILE, SSL_CERTFILE, ROUTER_DOMAIN
 from app.sse import sse_broadcaster
-from app.routers import admin, playground, proxy
+from app.routers import admin, playground, proxy, brain
 
 
 async def _build_status_dict():
@@ -72,6 +72,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 app.include_router(admin.router)
 app.include_router(playground.router)
 app.include_router(proxy.router)
+app.include_router(brain.router)
 
 
 if __name__ == "__main__":
