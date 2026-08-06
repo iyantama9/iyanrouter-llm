@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/
+*.md
+README.md
+
+# Exports and backups
+neon_export.json
+neon_backup.sql
+export_neon_data.py
+
+# Code review
+.code-review-graph/
+.claude/
+
+# Configs
+.opencode.json
+settings.json
+
+# Deployment
+.deploy/
+
+# Logs
+*.log
+logs/

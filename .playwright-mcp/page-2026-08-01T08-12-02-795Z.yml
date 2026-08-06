@@ -1,0 +1,33 @@
+- main [ref=e3]:
+  - generic [ref=e4]:
+    - img "Marketku Router" [ref=e6]
+    - generic [ref=e7]:
+      - generic [ref=e8]:
+        - generic [ref=e9]:
+          - generic [ref=e10]: Token Hari Ini
+          - generic [ref=e11]: —
+        - generic [ref=e12]:
+          - generic [ref=e13]: Token 7 Hari
+          - generic [ref=e14]: —
+        - generic [ref=e15]:
+          - generic [ref=e16]: Token 30 Hari
+          - generic [ref=e17]: —
+        - generic [ref=e18]:
+          - generic [ref=e19]: Total Pengguna
+          - generic [ref=e20]: —
+      - generic [ref=e22]:
+        - generic [ref=e24]: Status server
+        - generic [ref=e25]: Tidak tersedia
+  - generic [ref=e26]:
+    - generic [ref=e27]:
+      - generic [ref=e28]: Username
+      - textbox "Username" [active] [ref=e29]
+      - generic [ref=e30]: Password
+      - textbox "Password" [ref=e31]
+      - button "Masuk" [ref=e32] [cursor=pointer]
+    - generic [ref=e35]:
+      - text: Belum punya akun?
+      - link "Daftar sekarang" [ref=e36] [cursor=pointer]:
+        - /url: /register
+      - link "Masuk dengan API key lama" [ref=e37] [cursor=pointer]:
+        - /url: /api-key-login

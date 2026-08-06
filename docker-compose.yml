@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: llm-router-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: llm_router
+      POSTGRES_USER: llm_router_user
+      POSTGRES_PASSWORD: llm_router_pass_2024
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./neon_backup.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U llm_router_user -d llm_router"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: llm-router-app
+    restart: unless-stopped
+    ports:
+      - "80:80"      # HTTP (will redirect to HTTPS)
+      - "443:443"    # HTTPS
+      - "4000:4000"  # HTTP fallback
+    environment:
+      - DATABASE_URL=postgresql://llm_router_user:llm_router_pass_2024@postgres:5432/llm_router
+      - PORT=443
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+      - ./templates:/app/templates
+      - ./ssl:/app/ssl:ro  # Mount SSL certificates (read-only)
+
+volumes:
+  postgres_data:
+    driver: local
