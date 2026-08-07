@@ -2,7 +2,7 @@
 Embeddings Module - Text to Vector Embeddings
 
 Provides text embedding functionality for semantic search.
-Uses sentence-transformers for local embeddings (lightweight, no API calls).
+Uses FastEmbed with ONNX Runtime for local CPU embeddings (no API calls).
 """
 
 import os
@@ -24,52 +24,45 @@ class EmbeddingProvider:
         return [self.embed_text(t) for t in texts]
 
     def similarity(self, vec1: List[float], vec2: List[float]) -> float:
-        """Calculate cosine similarity between two vectors"""
+        """Calculate cosine similarity between compatible non-zero vectors."""
+        if len(vec1) != len(vec2):
+            return 0.0
         a = np.array(vec1)
         b = np.array(vec2)
-        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+        denominator = np.linalg.norm(a) * np.linalg.norm(b)
+        if denominator == 0:
+            return 0.0
+        return float(np.dot(a, b) / denominator)
 
 
-class SentenceTransformerEmbedding(EmbeddingProvider):
-    """Sentence-transformers based embeddings (local, no API calls)"""
+class FastEmbedEmbedding(EmbeddingProvider):
+    """FastEmbed ONNX embeddings for CPU-only inference."""
 
-    def __init__(self, model_name: str = "all-MiniLM-L6-v2"):
-        """
-        Initialize sentence-transformers model.
+    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2"):
+        """Initialize the 384-dimensional MiniLM embedding model."""
+        from fastembed import TextEmbedding
 
-        Default model: all-MiniLM-L6-v2
-        - Fast and lightweight (80MB)
-        - 384 dimensions
-        - Good quality for semantic search
-        """
-        try:
-            from sentence_transformers import SentenceTransformer
-            self.model = SentenceTransformer(model_name)
-            self.dimension = 384
-            print(f"[BRAIN] Loaded embedding model: {model_name}")
-        except ImportError:
-            print("[BRAIN] sentence-transformers not installed, falling back to simple embeddings")
-            raise
+        self.model = TextEmbedding(model_name=model_name)
+        self.dimension = 384
+        print(f"[BRAIN] Loaded FastEmbed model: {model_name}")
 
     def embed_text(self, text: str) -> List[float]:
-        """Embed single text"""
+        """Embed a single text."""
         if not text.strip():
             return [0.0] * self.dimension
-        embedding = self.model.encode(text, convert_to_numpy=True)
-        return embedding.tolist()
+        return next(self.model.embed([text])).tolist()
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """Embed multiple texts (more efficient than one-by-one)"""
+        """Embed multiple texts in one ONNX inference stream."""
         if not texts:
             return []
-        embeddings = self.model.encode(texts, convert_to_numpy=True, show_progress_bar=False)
-        return embeddings.tolist()
+        return [embedding.tolist() for embedding in self.model.embed(texts)]
 
 
 class SimpleEmbedding(EmbeddingProvider):
     """
     Fallback simple embedding using TF-IDF-like approach.
-    Used when sentence-transformers is not available.
+    Used when FastEmbed is not available.
     """
 
     def __init__(self):
@@ -158,11 +151,10 @@ def get_embedding_provider() -> EmbeddingProvider:
     global _embedding_provider, _embedding_cache
 
     if _embedding_provider is None:
-        # Try sentence-transformers first
         try:
-            _embedding_provider = SentenceTransformerEmbedding()
-        except (ImportError, Exception) as e:
-            print(f"[BRAIN] Could not load sentence-transformers: {e}")
+            _embedding_provider = FastEmbedEmbedding()
+        except Exception as e:
+            print(f"[BRAIN] Could not load FastEmbed: {e}")
             _embedding_provider = SimpleEmbedding()
 
         _embedding_cache = EmbeddingCache()

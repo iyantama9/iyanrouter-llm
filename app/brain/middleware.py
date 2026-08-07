@@ -80,31 +80,14 @@ class BrainMiddleware:
         if not brain_context:
             return payload
 
-        # Find system message or create one
-        messages = payload.get("messages", [])
-
-        # Look for existing system message
-        system_msg = None
-        system_idx = None
-        for i, msg in enumerate(messages):
-            if msg.get("role") == "system":
-                system_msg = msg
-                system_idx = i
-                break
-
-        if system_msg:
-            # Append to existing system message
-            existing_content = system_msg.get("content", "")
-            system_msg["content"] = existing_content + brain_context
-            messages[system_idx] = system_msg
+        system = payload.get("system")
+        if isinstance(system, list):
+            system.append({"type": "text", "text": brain_context})
+        elif isinstance(system, str):
+            payload["system"] = system + brain_context
         else:
-            # Insert new system message at the beginning
-            messages.insert(0, {
-                "role": "system",
-                "content": brain_context
-            })
+            payload["system"] = brain_context.strip()
 
-        payload["messages"] = messages
         return payload
 
     @staticmethod

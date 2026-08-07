@@ -21,9 +21,13 @@ from app.translator import (
     build_openai_request, to_anthropic_response, stream_as_anthropic, compact_messages,
     is_context_window_error, to_anthropic_stream_error, estimate_tokens,
 )
+from app.translator_openai import (
+    openai_to_anthropic_messages, anthropic_to_openai_response, anthropic_to_openai_stream_chunk
+)
 from app.sse import sse_broadcaster
 from app.brain.middleware import BrainMiddleware
 from app.brain.memory import MemoryManager
+from app.database import verify_router_api_key
 
 
 router = APIRouter()
@@ -47,12 +51,75 @@ async def _build_status_dict():
     }
 
 
-def _check_router_auth(request: Request):
+async def _check_router_auth(request: Request):
+    """Check router authentication via password or API key."""
     auth_header = request.headers.get("Authorization")
     x_api_key = request.headers.get("x-api-key")
-    if ROUTER_PASSWORD and auth_header != f"Bearer {ROUTER_PASSWORD}" and x_api_key != ROUTER_PASSWORD:
+
+    # Extract token from header
+    token = None
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+    elif x_api_key:
+        token = x_api_key
+
+    if not token:
         return False
-    return True
+
+    # Check ROUTER_PASSWORD first (backward compatibility)
+    if ROUTER_PASSWORD and token == ROUTER_PASSWORD:
+        return True
+
+    # Check router API keys from database
+    if token.startswith("rtr_"):
+        return await verify_router_api_key(token)
+
+    return False
+
+
+async def _save_brain_exchange(
+    session_id: int,
+    api_key_hash: str,
+    user_content: str,
+    assistant_content,
+    model: str,
+):
+    """Persist a completed exchange and index both messages in the brain."""
+    from app.database import append_to_session
+
+    user_row = await append_to_session(session_id, "user", user_content)
+    await BrainMiddleware.save_conversation_to_brain(
+        session_id=session_id,
+        api_key_hash=api_key_hash,
+        message_id=user_row["id"],
+        role="user",
+        content=user_content,
+        model=model,
+    )
+
+    if not assistant_content:
+        return
+
+    stored_assistant = (
+        assistant_content
+        if isinstance(assistant_content, str)
+        else json.dumps(assistant_content)
+    )
+    assistant_text = MemoryManager._extract_text_from_content(stored_assistant)
+    if not assistant_text.strip():
+        return
+
+    assistant_row = await append_to_session(
+        session_id, "assistant", stored_assistant
+    )
+    await BrainMiddleware.save_conversation_to_brain(
+        session_id=session_id,
+        api_key_hash=api_key_hash,
+        message_id=assistant_row["id"],
+        role="assistant",
+        content=assistant_text,
+        model=model,
+    )
 
 
 def _qwen_image_request(payload: dict) -> dict:
@@ -138,7 +205,7 @@ def _qwen_image_response(data: dict, model: str, msg_id: str) -> dict:
 @router.get("/v1/models")
 @router.get("/models")
 async def list_models(request: Request):
-    if not _check_router_auth(request):
+    if not await _check_router_auth(request):
         return JSONResponse(status_code=401, content={"error": {"message": "Invalid router password."}})
 
     models = []
@@ -181,7 +248,7 @@ async def count_tokens(body: dict = Body(...)):
 
 @router.post("/v1/messages")
 async def messages(request: Request):
-    if not _check_router_auth(request):
+    if not await _check_router_auth(request):
         return JSONResponse(status_code=401, content={"error": {"message": "Invalid router password."}})
 
     payload = await request.json()
@@ -233,7 +300,7 @@ async def messages(request: Request):
         elif payload["model"].startswith("kc/") or payload["model"] in KIMCHI_MODELS:
             provider = "kc"
 
-    for prefix in ("kc/", "cv/", "bm/", "nry/", "dh/", "qc/", "mk/", "at/"):
+    for prefix in ("kc/", "cv/", "bm/", "nry/", "dh/", "qc/", "mk/", "at/", "wz/"):
         if payload.get("model", "").startswith(prefix):
             payload["model"] = payload["model"][len(prefix):]
             break
@@ -262,100 +329,58 @@ async def messages(request: Request):
     else:
         current_key = get_current_key() if API_KEYS else ""
 
-    # Conversation Memory: Auto-generate session ID if not provided (hybrid approach)
-    session_id = None
+    # Brain sessions are automatic. Explicit session IDs let clients preserve
+    # continuity; otherwise the stable first user message identifies a thread.
+    auth_header = request.headers.get("Authorization", "")
+    x_api_key = request.headers.get("x-api-key", "")
+    client_credential = auth_header[7:] if auth_header.startswith("Bearer ") else x_api_key
+    api_key_hash_for_brain = BrainMiddleware.get_api_key_hash(client_credential)
+
+    if not session_id_header:
+        first_user = next((m for m in payload.get("messages", []) if m.get("role") == "user"), None)
+        first_user_text = MemoryManager._extract_text_from_content(
+            json.dumps(first_user.get("content", "")) if first_user else ""
+        )
+        session_id_header = BrainMiddleware.get_api_key_hash(
+            f"{api_key_hash_for_brain}:{first_user_text[:200]}"
+        )[:16]
+
+    from app.database import get_or_create_session, load_session_history
+    session_id = await get_or_create_session(
+        identifier=session_id_header,
+        api_key_hash=api_key_hash_for_brain,
+        model=payload.get("model")
+    )
+
     session_history = None
-
     if enable_memory:
-        # Determine which key pool to use for session identification
-        if provider == "cv":
-            current_key = get_current_cv_key() if CV_API_KEYS else CAVOTI_API_KEY or ""
-        elif provider == "bm":
-            current_key = get_current_bm_key() if BM_API_KEYS else BLUESMINDS_API_KEY or ""
-        elif provider == "nry":
-            current_key = get_current_nr_key() if NR_API_KEYS else ""
-        elif provider == "dahl":
-            current_key = get_current_dahl_key() if DAHL_API_KEYS else ""
-        elif provider == "qc":
-            current_key = get_current_qc_key() if QC_API_KEYS else ""
-        elif provider == "marketku":
-            current_key = get_current_marketku_key() if MARKETKU_API_KEYS else ""
-        elif provider == "atomesus":
-            current_key = get_current_atomesus_key() if ATOMESUS_API_KEYS else ""
-        elif provider == "weize":
-            current_key = get_current_weize_key() if WEIZE_API_KEYS else ""
-        else:
-            current_key = get_current_key() if API_KEYS else ""
-
-        if not session_id_header:
-            # Auto-generate from hash(api_key + first_user_message)
-            first_user = next((m for m in payload.get("messages", []) if m.get("role") == "user"), None)
-            if first_user:
-                import hashlib
-                content_preview = str(first_user.get("content", ""))[:50]
-                session_id_header = hashlib.md5(
-                    f"{current_key}:{content_preview}".encode()
-                ).hexdigest()[:16]
-
-        if session_id_header and current_key:
-            # Get or create session
-            import hashlib
-            from app.database import get_or_create_session, load_session_history
-            api_key_hash = hashlib.sha256(current_key.encode()).hexdigest()
-            session_id = await get_or_create_session(
-                identifier=session_id_header,
-                api_key_hash=api_key_hash,
-                model=payload.get("model")
-            )
-
-            # Load history
-            history_rows = await load_session_history(session_id, limit=config_module.MAX_HISTORY_MESSAGES)
-            if history_rows:
-                # Convert to OpenAI message format
-                session_history = []
-                for row in history_rows:
-                    role = row["role"]
-                    content_str = row["content"]
-                    # Try to parse JSON content (for assistant messages)
-                    try:
-                        content = json.loads(content_str)
-                        if isinstance(content, list):
-                            # Anthropic format content blocks - flatten to text
-                            text_parts = []
-                            for block in content:
-                                if isinstance(block, dict) and block.get("type") == "text":
-                                    text_parts.append(block.get("text", ""))
-                            content_str = "\n".join(text_parts) if text_parts else content_str
-                    except Exception:
-                        pass
-
-                    session_history.append({"role": role, "content": content_str})
+        history_rows = await load_session_history(session_id, limit=config_module.MAX_HISTORY_MESSAGES)
+        if history_rows:
+            session_history = []
+            for row in history_rows:
+                content_str = row["content"]
+                try:
+                    content = json.loads(content_str)
+                    if isinstance(content, list):
+                        text_parts = [
+                            block.get("text", "")
+                            for block in content
+                            if isinstance(block, dict) and block.get("type") == "text"
+                        ]
+                        content_str = "\n".join(text_parts) if text_parts else content_str
+                except Exception:
+                    pass
+                session_history.append({"role": row["role"], "content": content_str})
 
     # Brain: Build context from brain memory
     brain_context = None
-    api_key_hash_for_brain = None
     if enable_brain and user_message_text:
-        # Extract API key for brain (use current_key or fall back to auth header)
-        auth_header = request.headers.get("Authorization", "")
-        x_api_key = request.headers.get("x-api-key", "")
-
-        brain_api_key = ""
-        if current_key:
-            brain_api_key = current_key
-        elif auth_header.startswith("Bearer "):
-            brain_api_key = auth_header[7:]
-        elif x_api_key:
-            brain_api_key = x_api_key
-
-        if brain_api_key:
-            from app.brain.middleware import BrainMiddleware
-            api_key_hash_for_brain = BrainMiddleware.get_api_key_hash(brain_api_key)
-            brain_context = await BrainMiddleware.build_brain_context(
-                api_key_hash=api_key_hash_for_brain,
-                user_message=user_message_text,
-                session_id=session_id,
-                enable_brain=enable_brain
-            )
+        brain_context = await BrainMiddleware.build_brain_context(
+            api_key_hash=api_key_hash_for_brain,
+            user_message=user_message_text,
+            session_id=session_id,
+            enable_brain=enable_brain
+        )
 
     # Brain: Inject brain context into payload
     if brain_context:
@@ -618,8 +643,8 @@ async def messages(request: Request):
                                     if first_token_time is None:
                                         first_token_time = time.time()
 
-                                    # Accumulate response content for conversation memory
-                                    if enable_memory and session_id:
+                                    # Accumulate response content for brain persistence
+                                    if enable_brain and session_id:
                                         try:
                                             # Parse SSE chunk to extract content
                                             if chunk.startswith("event: content_block_start\ndata: "):
@@ -665,58 +690,17 @@ async def messages(request: Request):
                                 ttft_ms = int((first_token_time - start_req_time) * 1000) if first_token_time else total_ms
                                 add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, token_tracker["output_tokens"])
 
-                                # Conversation Memory: Save messages to session (streaming)
-                                if enable_memory and session_id:
-                                    from app.database import append_to_session
-                                    # Save user message
-                                    last_user_msg = payload.get("messages", [])[-1] if payload.get("messages") else None
-                                    if last_user_msg:
-                                        user_content = last_user_msg.get("content", "")
-                                        if isinstance(user_content, list):
-                                            # Flatten content blocks to text
-                                            text_parts = []
-                                            for block in user_content:
-                                                if isinstance(block, dict) and block.get("type") == "text":
-                                                    text_parts.append(block.get("text", ""))
-                                                elif isinstance(block, str):
-                                                    text_parts.append(block)
-                                            user_content = "\n".join(text_parts)
-                                        await append_to_session(session_id, "user", str(user_content))
-
-                                    # Save accumulated assistant response
-                                    # Filter out None entries and save as JSON
-                                    final_response = [block for block in accumulated_response if block is not None]
-                                    if final_response:
-                                        await append_to_session(session_id, "assistant", json.dumps(final_response))
-
-                                # Brain: Save conversation to brain (streaming)
-                                if enable_brain and api_key_hash_for_brain and user_message_text:
-                                    from app.brain.middleware import BrainMiddleware
-                                    # Save user message
-                                    if session_id:
-                                        await BrainMiddleware.save_conversation_to_brain(
-                                            session_id=session_id,
-                                            api_key_hash=api_key_hash_for_brain,
-                                            message_id=1,  # Auto-incremented by storage
-                                            role="user",
-                                            content=user_message_text,
-                                            model=log_model
-                                        )
-                                    # Save assistant response
-                                    if accumulated_response:
-                                        assistant_text = ""
-                                        for block in accumulated_response:
-                                            if block and isinstance(block, dict) and block.get("type") == "text":
-                                                assistant_text += block.get("text", "")
-                                        if assistant_text and session_id:
-                                            await BrainMiddleware.save_conversation_to_brain(
-                                                session_id=session_id,
-                                                api_key_hash=api_key_hash_for_brain,
-                                                message_id=2,
-                                                role="assistant",
-                                                content=assistant_text,
-                                                model=log_model
-                                            )
+                                final_response = [
+                                    block for block in accumulated_response if block is not None
+                                ]
+                                if enable_brain and user_message_text:
+                                    await _save_brain_exchange(
+                                        session_id=session_id,
+                                        api_key_hash=api_key_hash_for_brain,
+                                        user_content=user_message_text,
+                                        assistant_content=final_response,
+                                        model=log_model,
+                                    )
 
                                 threshold = config_module.SLOW_RESPONSE_THRESHOLD_MS
                                 if threshold > 0 and ttft_ms > threshold and len(api_keys_to_use) > 1:
@@ -921,57 +905,14 @@ async def messages(request: Request):
                 total_ms = int((time.time() - start_req_time) * 1000)
                 add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, output_tokens)
 
-                # Conversation Memory: Save messages to session
-                if enable_memory and session_id:
-                    from app.database import append_to_session
-                    # Save user message
-                    last_user_msg = payload.get("messages", [])[-1] if payload.get("messages") else None
-                    if last_user_msg:
-                        user_content = last_user_msg.get("content", "")
-                        if isinstance(user_content, list):
-                            # Flatten content blocks to text
-                            text_parts = []
-                            for block in user_content:
-                                if isinstance(block, dict) and block.get("type") == "text":
-                                    text_parts.append(block.get("text", ""))
-                                elif isinstance(block, str):
-                                    text_parts.append(block)
-                            user_content = "\n".join(text_parts)
-                        await append_to_session(session_id, "user", str(user_content))
-
-                    # Save assistant response
-                    assistant_content = anthropic_resp.get("content", [])
-                    await append_to_session(session_id, "assistant", json.dumps(assistant_content))
-
-                # Brain: Save conversation to brain (non-streaming)
-                if enable_brain and api_key_hash_for_brain and user_message_text:
-                    from app.brain.middleware import BrainMiddleware
-                    # Save user message
-                    if session_id:
-                        await BrainMiddleware.save_conversation_to_brain(
-                            session_id=session_id,
-                            api_key_hash=api_key_hash_for_brain,
-                            message_id=1,
-                            role="user",
-                            content=user_message_text,
-                            model=log_model
-                        )
-                    # Save assistant response
-                    assistant_content = anthropic_resp.get("content", [])
-                    if assistant_content and session_id:
-                        assistant_text = ""
-                        for block in assistant_content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                assistant_text += block.get("text", "")
-                        if assistant_text:
-                            await BrainMiddleware.save_conversation_to_brain(
-                                session_id=session_id,
-                                api_key_hash=api_key_hash_for_brain,
-                                message_id=2,
-                                role="assistant",
-                                content=assistant_text,
-                                model=log_model
-                            )
+                if enable_brain and user_message_text:
+                    await _save_brain_exchange(
+                        session_id=session_id,
+                        api_key_hash=api_key_hash_for_brain,
+                        user_content=user_message_text,
+                        assistant_content=anthropic_resp.get("content", []),
+                        model=log_model,
+                    )
 
                 threshold = config_module.SLOW_RESPONSE_THRESHOLD_MS
                 if threshold > 0 and total_ms > threshold and len(api_keys_to_use) > 1:
@@ -1054,3 +995,307 @@ async def messages(request: Request):
         status_code=400,
         content={"error": {"message": "Konteks terlalu panjang bahkan setelah auto-compact. Silakan mulai percakapan baru."}}
     )
+
+
+@router.post("/v1/chat/completions")
+async def chat_completions(request: Request):
+    """
+    OpenAI-compatible endpoint for OpenChamber and other OpenAI-compatible clients.
+    Keeps the external API OpenAI-shaped while using the same provider prefixes as
+    /v1/messages: kc, cv, bm, nry, dh, qc, mk, at, wz.
+    """
+    if not await _check_router_auth(request):
+        return JSONResponse(status_code=401, content={"error": {"message": "Invalid API key"}})
+
+    try:
+        openai_payload = await request.json()
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": {"message": f"Invalid JSON: {str(e)}"}})
+
+    payload = dict(openai_payload)
+    requested_model = payload.get("model") or "cv/gpt-5.4-mini"
+    print(f"[CHAT-COMPLETIONS] Model: {requested_model}, stream: {payload.get('stream')}", flush=True)
+    provider = "cv"
+
+    if requested_model.startswith("cv/") or requested_model in CAVOTI_MODELS:
+        provider = "cv"
+    elif requested_model.startswith("bm/") or requested_model in BLUESMINDS_MODELS:
+        provider = "bm"
+    elif requested_model.startswith("nry/") or requested_model in NARA_MODELS:
+        provider = "nry"
+    elif requested_model.startswith("dh/") or requested_model in DAHL_MODELS_SHORT:
+        provider = "dahl"
+    elif requested_model.startswith("qc/"):
+        provider = "qc"
+    elif requested_model.startswith("mk/") or requested_model in MARKETKU_MODELS:
+        provider = "marketku"
+    elif requested_model.startswith("at/") or requested_model in ATOMESUS_MODELS:
+        provider = "atomesus"
+    elif requested_model.startswith("wz/") or requested_model in WEIZE_MODELS:
+        provider = "weize"
+    elif requested_model.startswith("kc/") or requested_model in KIMCHI_MODELS:
+        provider = "kc"
+
+    provider_prefixes = {
+        "kc": "kc/",
+        "cv": "cv/",
+        "bm": "bm/",
+        "nry": "nry/",
+        "dahl": "dh/",
+        "qc": "qc/",
+        "marketku": "mk/",
+        "atomesus": "at/",
+        "weize": "wz/",
+    }
+    prefix = provider_prefixes.get(provider)
+    upstream_model = requested_model[len(prefix):] if prefix and requested_model.startswith(prefix) else requested_model
+    if provider == "dahl":
+        upstream_model = resolve_dahl_model(upstream_model)
+    payload["model"] = upstream_model
+
+    if provider == "cv":
+        upstream_base_url = CAVOTI_BASE_URL
+        api_keys_to_use = CV_API_KEYS or ([CAVOTI_API_KEY] if CAVOTI_API_KEY else [])
+        get_key = get_current_cv_key
+        rotate = rotate_cv_key
+    elif provider == "bm":
+        upstream_base_url = BLUESMINDS_BASE_URL
+        api_keys_to_use = BM_API_KEYS or ([BLUESMINDS_API_KEY] if BLUESMINDS_API_KEY else [])
+        get_key = get_current_bm_key
+        rotate = rotate_bm_key
+    elif provider == "nry":
+        upstream_base_url = NARA_BASE_URL
+        api_keys_to_use = NR_API_KEYS
+        get_key = get_current_nr_key
+        rotate = rotate_nr_key
+    elif provider == "dahl":
+        upstream_base_url = DAHL_BASE_URL
+        api_keys_to_use = DAHL_API_KEYS
+        get_key = get_current_dahl_key
+        rotate = rotate_dahl_key
+    elif provider == "qc":
+        upstream_base_url = QWEN_CLOUD_BASE_URL
+        api_keys_to_use = QC_API_KEYS
+        get_key = get_current_qc_key
+        rotate = rotate_qc_key
+    elif provider == "marketku":
+        upstream_base_url = MARKETKU_BASE_URL
+        api_keys_to_use = MARKETKU_API_KEYS
+        get_key = get_current_marketku_key
+        rotate = rotate_marketku_key
+    elif provider == "atomesus":
+        upstream_base_url = ATOMESUS_BASE_URL
+        api_keys_to_use = ATOMESUS_API_KEYS
+        get_key = get_current_atomesus_key
+        rotate = rotate_atomesus_key
+    elif provider == "weize":
+        upstream_base_url = WEIZE_BASE_URL
+        api_keys_to_use = WEIZE_API_KEYS
+        get_key = get_current_weize_key
+        rotate = rotate_weize_key
+    else:
+        upstream_base_url = DEFAULT_UPSTREAM_URL
+        api_keys_to_use = API_KEYS
+        get_key = get_current_key
+        rotate = rotate_key
+
+    if not api_keys_to_use:
+        return JSONResponse(status_code=500, content={"error": {"message": "No upstream API keys available"}})
+
+    messages = payload.get("messages") or []
+    user_message_text = ""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                user_message_text = content
+            elif isinstance(content, list):
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "text":
+                            text_parts.append(block.get("text", ""))
+                        elif isinstance(block.get("text"), str):
+                            text_parts.append(block.get("text"))
+                    elif isinstance(block, str):
+                        text_parts.append(block)
+                user_message_text = "\n".join(text_parts)
+            break
+
+    auth_header = request.headers.get("Authorization", "")
+    x_api_key = request.headers.get("x-api-key", "")
+    client_credential = auth_header[7:] if auth_header.startswith("Bearer ") else x_api_key
+    api_key_hash_for_brain = BrainMiddleware.get_api_key_hash(client_credential)
+    session_id_header = request.headers.get("X-Session-Id")
+    if not session_id_header:
+        session_id_header = BrainMiddleware.get_api_key_hash(
+            f"{api_key_hash_for_brain}:{user_message_text[:200]}"
+        )[:16]
+
+    from app.database import get_or_create_session
+    session_id = await get_or_create_session(
+        identifier=session_id_header,
+        api_key_hash=api_key_hash_for_brain,
+        model=requested_model,
+    )
+
+    if user_message_text:
+        brain_context = await BrainMiddleware.build_brain_context(
+            api_key_hash=api_key_hash_for_brain,
+            user_message=user_message_text,
+            session_id=session_id,
+            enable_brain=True,
+        )
+        if brain_context:
+            payload_messages = list(messages)
+            system_index = next((i for i, msg in enumerate(payload_messages) if msg.get("role") == "system"), None)
+            if system_index is None:
+                payload_messages.insert(0, {"role": "system", "content": brain_context.strip()})
+            else:
+                existing = payload_messages[system_index].get("content", "")
+                payload_messages[system_index] = {
+                    **payload_messages[system_index],
+                    "content": f"{existing}{brain_context}" if isinstance(existing, str) else brain_context.strip(),
+                }
+            payload["messages"] = payload_messages
+
+    upstream_endpoint = f"{upstream_base_url.rstrip('/')}/chat/completions"
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "iyan-router/openai-compatible",
+    }
+
+    last_status = 429
+    last_content = {"error": {"message": "All configured API keys are rate limited or unauthorized."}}
+
+    for attempt in range(len(api_keys_to_use)):
+        current_key = get_key()
+        headers["Authorization"] = f"Bearer {current_key}"
+        start_req_time = time.time()
+
+        try:
+            if payload.get("stream"):
+                print(f"[STREAM-INIT] Entering stream mode for model: {requested_model}, stream={payload.get('stream')}", flush=True)
+
+                async def stream_openai():
+                    import re
+                    should_strip = requested_model.endswith(("-thinking", "-agentic", "-thinking-agentic"))
+                    buffer = ""
+                    inside_thinking = False
+
+                    print(f"[STREAM] Model: {requested_model}, should_strip: {should_strip}", flush=True)
+
+                    async with httpx.AsyncClient(timeout=300) as client:
+                        async with client.stream("POST", upstream_endpoint, headers=headers, json=payload) as resp:
+                            if resp.status_code != 200:
+                                error_text = (await resp.aread()).decode(errors="replace")
+                                yield f"data: {json.dumps({'error': {'message': error_text}})}\n\n"
+                                return
+
+                            async for chunk in resp.aiter_bytes():
+                                if not should_strip:
+                                    yield chunk
+                                    continue
+
+                                # Decode and parse SSE chunks
+                                text = chunk.decode('utf-8', errors='ignore')
+                                buffer += text
+
+                                # Process complete lines
+                                lines = buffer.split('\n')
+                                buffer = lines[-1]  # Keep incomplete line in buffer
+
+                                for line in lines[:-1]:
+                                    if line.startswith('data: '):
+                                        try:
+                                            data = json.loads(line[6:])
+                                            if 'choices' in data and len(data['choices']) > 0:
+                                                delta = data['choices'][0].get('delta', {})
+                                                content = delta.get('content', '')
+
+                                                if content:
+                                                    original = content
+                                                    # Track thinking tag state
+                                                    if '<thinking>' in content:
+                                                        inside_thinking = True
+                                                    if '</thinking>' in content:
+                                                        inside_thinking = False
+                                                        content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
+                                                    elif inside_thinking or '<thinking>' in content:
+                                                        content = re.sub(r'<thinking>.*', '', content, flags=re.DOTALL)
+
+                                                    if original != content:
+                                                        logger.info(f"[STREAM] Stripped: {repr(original)} -> {repr(content)}")
+
+                                                    # Update content in response
+                                                    data['choices'][0]['delta']['content'] = content
+                                                    if content:  # Only yield if there's content after stripping
+                                                        yield f"data: {json.dumps(data)}\n".encode('utf-8')
+                                                else:
+                                                    yield f"{line}\n".encode('utf-8')
+                                            else:
+                                                yield f"{line}\n".encode('utf-8')
+                                        except Exception as e:
+                                            logger.warning(f"[STREAM] Parse error: {e}")
+                                            yield f"{line}\n".encode('utf-8')
+                                    else:
+                                        yield f"{line}\n".encode('utf-8')
+
+                return StreamingResponse(stream_openai(), media_type="text/event-stream")
+
+            async with httpx.AsyncClient(timeout=300) as client:
+                resp = await client.post(upstream_endpoint, headers=headers, json=payload)
+
+            try:
+                content = resp.json()
+            except Exception:
+                content = {"error": {"message": resp.text}}
+
+            if resp.status_code == 200:
+                choice = (content.get("choices") or [{}])[0]
+                message = choice.get("message") or {}
+                assistant_content = message.get("content")
+                if not assistant_content and message.get("tool_calls"):
+                    assistant_content = json.dumps(message.get("tool_calls"))
+
+                # Strip thinking tags for -thinking/-agentic models in OpenAI format
+                if assistant_content and isinstance(assistant_content, str):
+                    if requested_model.endswith(("-thinking", "-agentic", "-thinking-agentic")):
+                        import re
+                        assistant_content = re.sub(r'<thinking>.*?</thinking>\s*', '', assistant_content, flags=re.DOTALL)
+                        # Update content in response
+                        if "choices" in content and len(content["choices"]) > 0:
+                            if "message" in content["choices"][0]:
+                                content["choices"][0]["message"]["content"] = assistant_content
+
+                if user_message_text:
+                    await _save_brain_exchange(
+                        session_id=session_id,
+                        api_key_hash=api_key_hash_for_brain,
+                        user_content=user_message_text,
+                        assistant_content=assistant_content,
+                        model=requested_model,
+                    )
+                add_request_log(requested_model, 200, current_key, False, int((time.time() - start_req_time) * 1000))
+                await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
+                await sse_broadcaster.broadcast("status", await _build_status_dict())
+                return JSONResponse(content)
+
+            last_status = resp.status_code
+            last_content = content
+            add_request_log(requested_model, resp.status_code, current_key, True, int((time.time() - start_req_time) * 1000))
+            if resp.status_code in (401, 402, 403, 404, 429, 500, 502, 503, 504) and attempt < len(api_keys_to_use) - 1:
+                rotate()
+                continue
+            return JSONResponse(status_code=resp.status_code, content=content)
+        except Exception as e:
+            last_status = 500
+            last_content = {"error": {"message": str(e)}}
+            add_request_log(requested_model, 500, current_key, True, int((time.time() - start_req_time) * 1000))
+            if attempt < len(api_keys_to_use) - 1:
+                rotate()
+                continue
+            return JSONResponse(status_code=500, content=last_content)
+
+    return JSONResponse(status_code=last_status, content=last_content)
+

@@ -11,7 +11,16 @@ Handles:
 import json
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-from app.database import execute, fetch, fetchrow
+from app.database import execute, fetch, fetchrow, setup_tables
+
+
+def _serialize_row(row) -> Dict[str, Any]:
+    """Convert an asyncpg record into JSON-safe response data."""
+    data = dict(row)
+    for key, value in data.items():
+        if isinstance(value, datetime):
+            data[key] = value.isoformat()
+    return data
 
 
 class BrainStorage:
@@ -19,90 +28,8 @@ class BrainStorage:
 
     @staticmethod
     async def init_tables():
-        """Initialize brain tables in PostgreSQL"""
-
-        # Conversation embeddings table
-        await execute("""
-            CREATE TABLE IF NOT EXISTS brain_conversations (
-                id SERIAL PRIMARY KEY,
-                session_id INTEGER REFERENCES chat_sessions(id) ON DELETE CASCADE,
-                api_key_hash VARCHAR(64) NOT NULL,
-                message_id INTEGER REFERENCES chat_messages(id) ON DELETE CASCADE,
-                role VARCHAR(50) NOT NULL,
-                content TEXT NOT NULL,
-                embedding JSONB,
-                model VARCHAR(100),
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            )
-        """)
-
-        # Decisions table
-        await execute("""
-            CREATE TABLE IF NOT EXISTS brain_decisions (
-                id SERIAL PRIMARY KEY,
-                api_key_hash VARCHAR(64) NOT NULL,
-                session_id INTEGER REFERENCES chat_sessions(id) ON DELETE CASCADE,
-                decision_type VARCHAR(100),
-                title TEXT NOT NULL,
-                description TEXT,
-                context TEXT,
-                outcome TEXT,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            )
-        """)
-
-        # Facts table
-        await execute("""
-            CREATE TABLE IF NOT EXISTS brain_facts (
-                id SERIAL PRIMARY KEY,
-                api_key_hash VARCHAR(64) NOT NULL,
-                session_id INTEGER REFERENCES chat_sessions(id) ON DELETE CASCADE,
-                category VARCHAR(100),
-                fact TEXT NOT NULL,
-                source TEXT,
-                confidence FLOAT DEFAULT 1.0,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            )
-        """)
-
-        # User profile table
-        await execute("""
-            CREATE TABLE IF NOT EXISTS brain_profiles (
-                id SERIAL PRIMARY KEY,
-                api_key_hash VARCHAR(64) NOT NULL UNIQUE,
-                preferences JSONB,
-                metadata JSONB,
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-                updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-            )
-        """)
-
-        # Indexes for performance
-        await execute("""
-            CREATE INDEX IF NOT EXISTS idx_brain_conversations_session
-            ON brain_conversations(session_id)
-        """)
-        await execute("""
-            CREATE INDEX IF NOT EXISTS idx_brain_conversations_api_key
-            ON brain_conversations(api_key_hash)
-        """)
-        await execute("""
-            CREATE INDEX IF NOT EXISTS idx_brain_conversations_created
-            ON brain_conversations(created_at DESC)
-        """)
-        await execute("""
-            CREATE INDEX IF NOT EXISTS idx_brain_decisions_api_key
-            ON brain_decisions(api_key_hash)
-        """)
-        await execute("""
-            CREATE INDEX IF NOT EXISTS idx_brain_decisions_session
-            ON brain_decisions(session_id)
-        """)
-        await execute("""
-            CREATE INDEX IF NOT EXISTS idx_brain_facts_api_key
-            ON brain_facts(api_key_hash)
-        """)
-
+        """Initialize tables through the application's single schema path."""
+        await setup_tables()
         print("[BRAIN] Database tables initialized")
 
     @staticmethod
@@ -146,7 +73,7 @@ class BrainStorage:
                 LIMIT $2
             """, api_key_hash, limit)
 
-        return [dict(row) for row in rows]
+        return [_serialize_row(row) for row in rows]
 
     @staticmethod
     async def search_conversations_by_embedding(
@@ -180,10 +107,12 @@ class BrainStorage:
         from app.brain.embeddings import cosine_similarity
         results = []
         for row in rows:
-            embedding = json.loads(row["embedding"])
+            embedding = row["embedding"]
+            if isinstance(embedding, str):
+                embedding = json.loads(embedding)
             similarity = cosine_similarity(query_embedding, embedding)
             results.append({
-                **dict(row),
+                **_serialize_row(row),
                 "similarity": similarity
             })
 
@@ -245,7 +174,7 @@ class BrainStorage:
                 LIMIT $2
             """, api_key_hash, limit)
 
-        return [dict(row) for row in rows]
+        return [_serialize_row(row) for row in rows]
 
     @staticmethod
     async def save_fact(
@@ -300,4 +229,4 @@ class BrainStorage:
                 LIMIT $2
             """, api_key_hash, limit)
 
-        return [dict(row) for row in rows]
+        return [_serialize_row(row) for row in rows]
