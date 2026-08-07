@@ -29,6 +29,7 @@ build/
 .kiro/
 .mcp.json
 .opencode.json
+.playwright-mcp/
 settings.json
 settings.local.json
 
