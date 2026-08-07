@@ -9,13 +9,15 @@ import httpx
 
 import app.config as config_module
 from app.config import (
-    CAVOTI_BASE_URL, BLUESMINDS_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL, ROUTER_PASSWORD,
+    KIMCHI_BASE_URL, CAVOTI_BASE_URL, BLUESMINDS_BASE_URL, NARA_BASE_URL, DAHL_BASE_URL,
+    QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL, ATOMESUS_BASE_URL, WEIZE_BASE_URL, ROUTER_PASSWORD,
     KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS_SHORT, QWEN_CLOUD_MODELS, MARKETKU_MODELS, ATOMESUS_MODELS, WEIZE_MODELS,
     recent_requests,
     add_api_key, remove_api_key, reset_key_status, get_masked_keys, set_active_key,
     SESSION_SECRET, ADMIN_USERNAME, verify_admin_password, get_paginated_logs,
 )
 from app.sse import sse_broadcaster
+from app.database import fetch, fetch_one, create_router_api_key, get_router_api_keys, delete_router_api_key
 
 
 router = APIRouter()
@@ -229,6 +231,233 @@ async def api_get_models(user: None = Depends(require_auth)):
     }
 
 
+@router.post("/api/models/refresh")
+async def api_refresh_models(user: None = Depends(require_auth)):
+    """Query all provider APIs and update model lists in .env file."""
+    from pathlib import Path
+
+    updated_count = 0
+    updates = {}
+
+    # Provider to base_url mapping
+    provider_base_urls = {
+        "kc": KIMCHI_BASE_URL,
+        "cv": CAVOTI_BASE_URL,
+        "bm": BLUESMINDS_BASE_URL,
+        "nry": NARA_BASE_URL,
+        "dahl": DAHL_BASE_URL,
+        "qc": QWEN_CLOUD_BASE_URL,
+        "marketku": MARKETKU_BASE_URL,
+        "atomesus": ATOMESUS_BASE_URL,
+        "weize": WEIZE_BASE_URL,
+    }
+
+    # Provider to env var name mapping
+    provider_env_vars = {
+        "kc": "KIMCHI_MODELS",
+        "cv": "CAVOTI_MODELS",
+        "bm": "BLUESMINDS_MODELS",
+        "nry": "NARA_MODELS",
+        "dahl": "DAHL_MODELS",
+        "qc": "QWEN_CLOUD_MODELS",
+        "marketku": "MARKETKU_MODELS",
+        "atomesus": "ATOMESUS_MODELS",
+        "weize": "WEIZE_MODELS",
+    }
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        # Get distinct providers from api_keys
+        providers = await fetch("SELECT DISTINCT provider FROM api_keys ORDER BY provider")
+
+        for provider_row in providers:
+            provider = provider_row["provider"]
+            base_url = provider_base_urls.get(provider)
+            env_var = provider_env_vars.get(provider)
+
+            if not base_url or not env_var:
+                continue
+
+            try:
+                # Get any available key for this provider
+                key_row = await fetch_one(
+                    "SELECT key_value FROM api_keys WHERE provider = $1 LIMIT 1",
+                    provider
+                )
+
+                if not key_row:
+                    continue
+
+                api_key = key_row["key_value"]
+
+                # Scan /models endpoint
+                headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+                r = await client.get(f"{base_url}/models", headers=headers)
+
+                if r.status_code == 200:
+                    data = r.json()
+                    models = [m["id"] for m in data.get("data", [])]
+
+                    # Deduplicate
+                    models = list(dict.fromkeys(models))
+
+                    if models:
+                        updates[env_var] = ",".join(models)
+                        updated_count += 1
+
+            except Exception as e:
+                # Log individual provider failures for debugging
+                print(f"[REFRESH] Failed to scan {provider}: {type(e).__name__}: {e}")
+                pass
+
+    # Update .env file
+    if updates:
+        env_path = Path(".env")
+        if env_path.exists():
+            lines = env_path.read_text().splitlines()
+            new_lines = []
+            for line in lines:
+                updated = False
+                for key, value in updates.items():
+                    if line.startswith(f"{key}="):
+                        new_lines.append(f"{key}={value}")
+                        updated = True
+                        break
+                if not updated:
+                    new_lines.append(line)
+            env_path.write_text("\n".join(new_lines) + "\n")
+
+    return {"success": True, "updated": updated_count, "providers": list(updates.keys())}
+
+
+def _json_safe_row(row):
+    data = dict(row)
+    for key, value in data.items():
+        if hasattr(value, "isoformat"):
+            data[key] = value.isoformat()
+    return data
+
+
+@router.get("/api/brain/monitor")
+async def api_brain_monitor(user: None = Depends(require_auth)):
+    # Run all queries in parallel for faster response
+    import asyncio
+
+    counts_task = fetch("""
+        SELECT
+            (SELECT COUNT(*) FROM brain_conversations) AS conversations,
+            (SELECT COUNT(*) FROM brain_decisions) AS decisions,
+            (SELECT COUNT(*) FROM brain_facts) AS facts,
+            (SELECT COUNT(*) FROM brain_profiles) AS profiles,
+            (SELECT COUNT(DISTINCT api_key_hash) FROM brain_conversations) AS users,
+            (SELECT COUNT(DISTINCT session_id) FROM brain_conversations) AS sessions,
+            (SELECT COUNT(*) FROM brain_conversations WHERE embedding IS NOT NULL) AS embedded_messages,
+            (SELECT COUNT(*) FROM brain_conversations WHERE created_at >= NOW() - INTERVAL '24 hours') AS messages_24h
+    """)
+
+    recent_conversations_task = fetch("""
+        SELECT
+            bc.id,
+            bc.session_id,
+            LEFT(bc.api_key_hash, 10) AS user_hash,
+            bc.role,
+            bc.model,
+            LEFT(bc.content, 180) AS content_preview,
+            bc.content,
+            bc.embedding IS NOT NULL AS has_embedding,
+            bc.created_at,
+            cs.project_identifier,
+            cs.name AS session_name
+        FROM brain_conversations bc
+        LEFT JOIN chat_sessions cs ON cs.id = bc.session_id
+        ORDER BY bc.created_at DESC
+        LIMIT 20
+    """)
+
+    top_sessions_task = fetch("""
+        SELECT
+            cs.id,
+            cs.name,
+            cs.project_identifier,
+            cs.last_model,
+            LEFT(cs.api_key_hash, 10) AS user_hash,
+            COUNT(bc.id) AS brain_messages,
+            MAX(bc.created_at) AS last_memory_at
+        FROM chat_sessions cs
+        JOIN brain_conversations bc ON bc.session_id = cs.id
+        GROUP BY cs.id, cs.name, cs.project_identifier, cs.last_model, cs.api_key_hash
+        ORDER BY last_memory_at DESC
+        LIMIT 10
+    """)
+
+    recent_decisions_task = fetch("""
+        SELECT
+            id,
+            session_id,
+            LEFT(api_key_hash, 10) AS user_hash,
+            decision_type,
+            title,
+            LEFT(COALESCE(outcome, description, context, ''), 180) AS detail_preview,
+            created_at
+        FROM brain_decisions
+        ORDER BY created_at DESC
+        LIMIT 10
+    """)
+
+    recent_facts_task = fetch("""
+        SELECT
+            id,
+            session_id,
+            LEFT(api_key_hash, 10) AS user_hash,
+            category,
+            fact,
+            confidence,
+            created_at
+        FROM brain_facts
+        ORDER BY created_at DESC
+        LIMIT 10
+    """)
+
+    # Wait for all queries to complete in parallel
+    counts, recent_conversations, top_sessions, recent_decisions, recent_facts = await asyncio.gather(
+        counts_task,
+        recent_conversations_task,
+        top_sessions_task,
+        recent_decisions_task,
+        recent_facts_task
+    )
+
+    return {
+        "counts": _json_safe_row(counts[0]) if counts else {},
+        "recent_conversations": [_json_safe_row(row) for row in recent_conversations],
+        "top_sessions": [_json_safe_row(row) for row in top_sessions],
+        "recent_decisions": [_json_safe_row(row) for row in recent_decisions],
+        "recent_facts": [_json_safe_row(row) for row in recent_facts],
+    }
+
+
+@router.get("/api/brain/session/{session_id}/messages")
+async def api_brain_session_messages(session_id: int, user: None = Depends(require_auth)):
+    messages = await fetch("""
+        SELECT
+            bc.id,
+            bc.role,
+            bc.model,
+            LEFT(bc.content, 180) AS content_preview,
+            bc.content,
+            bc.embedding IS NOT NULL AS has_embedding,
+            bc.created_at
+        FROM brain_conversations bc
+        WHERE bc.session_id = $1
+        ORDER BY bc.created_at ASC
+    """, session_id)
+
+    return {
+        "session_id": session_id,
+        "messages": [_json_safe_row(row) for row in messages],
+        "count": len(messages)
+    }
+
+
 @router.get("/api/sse")
 async def sse_endpoint(request: Request, user: None = Depends(require_auth)):
     async def event_generator() -> AsyncGenerator[str, None]:
@@ -246,3 +475,28 @@ async def sse_endpoint(request: Request, user: None = Depends(require_auth)):
             sse_broadcaster.disconnect(q)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.get("/api/router-keys")
+async def api_get_router_keys(user: None = Depends(require_auth)):
+    """Get all router API keys."""
+    keys = await get_router_api_keys()
+    return {"keys": [_json_safe_row(k) for k in keys]}
+
+
+@router.post("/api/router-keys")
+async def api_create_router_key(payload: dict = Body(...), user: None = Depends(require_auth)):
+    """Generate a new router API key."""
+    key_name = payload.get("key_name", "").strip()
+    if not key_name:
+        return JSONResponse(status_code=400, content={"success": False, "message": "Key name is required"})
+
+    key = await create_router_api_key(key_name)
+    return {"success": True, "key": _json_safe_row(key)}
+
+
+@router.delete("/api/router-keys/{key_id}")
+async def api_delete_router_key(key_id: int, user: None = Depends(require_auth)):
+    """Delete a router API key."""
+    await delete_router_api_key(key_id)
+    return {"success": True, "message": "Key deleted"}

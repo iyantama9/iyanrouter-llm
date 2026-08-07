@@ -39,6 +39,9 @@ async def fetchrow(query, *args):
     async with _pool.acquire() as conn:
         return await conn.fetchrow(query, *args)
 
+async def fetch_one(query, *args):
+    return await fetchrow(query, *args)
+
 async def setup_tables():
     await execute("""
         CREATE TABLE IF NOT EXISTS api_keys (
@@ -129,40 +132,65 @@ async def setup_tables():
     await execute("""
         CREATE TABLE IF NOT EXISTS brain_conversations (
             id SERIAL PRIMARY KEY,
-            session_id INTEGER,
+            session_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
             api_key_hash VARCHAR(64) NOT NULL,
-            message_id INTEGER NOT NULL,
+            message_id INTEGER NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
             role VARCHAR(50) NOT NULL,
             content TEXT NOT NULL,
+            embedding JSONB,
             model VARCHAR(100),
-            embedding BYTEA,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )
     """)
     await execute("""
-        CREATE INDEX IF NOT EXISTS idx_brain_conv_session
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'brain_conversations'
+                  AND column_name = 'embedding'
+                  AND data_type = 'bytea'
+            ) THEN
+                ALTER TABLE brain_conversations
+                ALTER COLUMN embedding TYPE JSONB
+                USING CASE
+                    WHEN embedding IS NULL THEN NULL
+                    ELSE convert_from(embedding, 'UTF8')::JSONB
+                END;
+            END IF;
+        END $$
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_conversations_session
         ON brain_conversations(session_id)
     """)
     await execute("""
-        CREATE INDEX IF NOT EXISTS idx_brain_conv_api_key
+        CREATE INDEX IF NOT EXISTS idx_brain_conversations_api_key
         ON brain_conversations(api_key_hash)
     """)
     await execute("""
-        CREATE INDEX IF NOT EXISTS idx_brain_conv_created
+        CREATE INDEX IF NOT EXISTS idx_brain_conversations_created
         ON brain_conversations(created_at DESC)
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_conversations_session_created
+        ON brain_conversations(session_id, created_at)
+    """)
+    await execute("""
+        DROP INDEX IF EXISTS idx_brain_conversations_embedding
     """)
 
     await execute("""
         CREATE TABLE IF NOT EXISTS brain_decisions (
             id SERIAL PRIMARY KEY,
             api_key_hash VARCHAR(64) NOT NULL,
-            session_id INTEGER,
-            title VARCHAR(500) NOT NULL,
+            session_id INTEGER REFERENCES chat_sessions(id) ON DELETE CASCADE,
+            decision_type VARCHAR(100),
+            title TEXT NOT NULL,
             description TEXT,
             context TEXT,
             outcome TEXT,
-            decision_type VARCHAR(100),
-            embedding BYTEA,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )
     """)
@@ -174,19 +202,21 @@ async def setup_tables():
         CREATE INDEX IF NOT EXISTS idx_brain_decisions_session
         ON brain_decisions(session_id)
     """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_decisions_created
+        ON brain_decisions(created_at DESC)
+    """)
 
     await execute("""
         CREATE TABLE IF NOT EXISTS brain_facts (
             id SERIAL PRIMARY KEY,
             api_key_hash VARCHAR(64) NOT NULL,
-            session_id INTEGER,
-            fact TEXT NOT NULL,
+            session_id INTEGER REFERENCES chat_sessions(id) ON DELETE CASCADE,
             category VARCHAR(100),
-            source VARCHAR(200),
+            fact TEXT NOT NULL,
+            source TEXT,
             confidence FLOAT DEFAULT 1.0,
-            embedding BYTEA,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )
     """)
     await execute("""
@@ -210,6 +240,22 @@ async def setup_tables():
     await execute("""
         CREATE INDEX IF NOT EXISTS idx_brain_profiles_api_key
         ON brain_profiles(api_key_hash)
+    """)
+
+    # ── Router API Keys ──
+    await execute("""
+        CREATE TABLE IF NOT EXISTS router_api_keys (
+            id SERIAL PRIMARY KEY,
+            key_value TEXT NOT NULL UNIQUE,
+            key_name TEXT NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+            last_used_at TIMESTAMP WITH TIME ZONE,
+            is_active BOOLEAN DEFAULT TRUE
+        )
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_router_api_keys_value
+        ON router_api_keys(key_value) WHERE is_active = TRUE
     """)
 
 
@@ -273,10 +319,10 @@ async def load_session_history(session_id: int, limit: int = 20):
     return list(reversed(messages))
 
 async def append_to_session(session_id: int, role: str, content: str):
-    """Append a message to session history."""
+    """Append a message to session history and return its database row."""
     await execute("UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1", session_id)
-    await execute(
-        "INSERT INTO chat_messages (session_id, role, content) VALUES ($1, $2, $3)",
+    return await fetchrow(
+        "INSERT INTO chat_messages (session_id, role, content) VALUES ($1, $2, $3) RETURNING *",
         session_id, role, content
     )
 
@@ -286,3 +332,37 @@ async def cleanup_old_sessions(retention_days: int = 30):
         "DELETE FROM chat_sessions WHERE updated_at < NOW() - INTERVAL '%s days'",
         retention_days
     )
+
+# ── Router API Key Helpers ──
+async def create_router_api_key(key_name: str):
+    """Generate a new router API key."""
+    import secrets
+    key_value = f"rtr_{secrets.token_urlsafe(32)}"
+    return await fetchrow(
+        "INSERT INTO router_api_keys (key_value, key_name) VALUES ($1, $2) RETURNING *",
+        key_value, key_name
+    )
+
+async def get_router_api_keys():
+    """Get all active router API keys."""
+    return await fetch(
+        "SELECT id, key_name, created_at, last_used_at, is_active FROM router_api_keys ORDER BY created_at DESC"
+    )
+
+async def verify_router_api_key(key_value: str):
+    """Verify router API key and update last_used_at."""
+    key = await fetchrow(
+        "SELECT id FROM router_api_keys WHERE key_value = $1 AND is_active = TRUE",
+        key_value
+    )
+    if key:
+        await execute(
+            "UPDATE router_api_keys SET last_used_at = NOW() WHERE id = $1",
+            key["id"]
+        )
+        return True
+    return False
+
+async def delete_router_api_key(key_id: int):
+    """Delete a router API key."""
+    await execute("DELETE FROM router_api_keys WHERE id = $1", key_id)

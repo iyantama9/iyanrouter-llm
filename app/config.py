@@ -57,6 +57,7 @@ WEIZE_API_KEYS_ENV = [k.strip() for k in WEIZE_API_KEYS_RAW.split(",") if k.stri
 QC_FALLBACK_ORDER_RAW = os.getenv("QC_FALLBACK_ORDER", "qwen3.7-max,qwen-max,qwen-plus,deepseek-v3.2,glm-5.2,kimi-k2.7-code,qwen-turbo")
 QC_FALLBACK_ORDER = [m.strip() for m in QC_FALLBACK_ORDER_RAW.split(",") if m.strip()]
 
+KIMCHI_BASE_URL = os.getenv("KIMCHI_BASE_URL", "https://api.kimchi.cloud/v1").rstrip("/")
 DAHL_BASE_URL = os.getenv("DAHL_BASE_URL", "https://inference.dahl.global/v1").rstrip("/")
 QWEN_CLOUD_BASE_URL = os.getenv("QWEN_CLOUD_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1").rstrip("/")
 MARKETKU_BASE_URL = os.getenv("MARKETKU_BASE_URL", "https://router.marketku.id/v1").rstrip("/")
