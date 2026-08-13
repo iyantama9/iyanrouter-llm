@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Dashboard — Iyan Router{% endblock %}
+{% block title %}Iyan Router | Dashboard{% endblock %}
 
 {% block content %}
 <div class="min-h-screen flex bg-background grid-bg" x-data="dashboard()" x-init="init()">
@@ -17,7 +17,12 @@
     <div class="px-4 py-5 border-b border-border flex items-center transition-all duration-300"
          :class="sidebarCollapsed ? 'justify-center' : 'gap-3'">
       <div class="w-8 h-8 rounded-md bg-primary/10 border border-primary/20 flex items-center justify-center text-primary shrink-0">
-        <i data-lucide="network" class="w-[15px] h-[15px]"></i>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-[15px] h-[15px]">
+          <circle cx="12" cy="5" r="2.5"/>
+          <circle cx="4.5" cy="19" r="2.5"/>
+          <circle cx="19.5" cy="19" r="2.5"/>
+          <path d="M12 7.5v4m0 0-6 5m6-5 6 5"/>
+        </svg>
       </div>
       <div class="leading-none overflow-hidden transition-all duration-300"
            :class="sidebarCollapsed ? 'w-0 opacity-0' : 'w-auto opacity-100'">

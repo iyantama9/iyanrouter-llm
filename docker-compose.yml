@@ -38,6 +38,7 @@ services:
     volumes:
       - ./app:/app/app
       - ./templates:/app/templates
+      - ./static:/app/static
       - ./ssl:/app/ssl:ro  # Mount SSL certificates (read-only)
       - ./.env:/app/.env    # so /api/models/refresh writes persist on the host
 

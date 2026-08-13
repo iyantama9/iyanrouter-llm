@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Sign In — Iyan Router{% endblock %}
+{% block title %}Iyan Router | Sign In{% endblock %}
 
 {% block content %}
 <div class="min-h-screen flex items-center justify-center bg-background p-4"
@@ -45,7 +45,12 @@
         <!-- Brand -->
         <div class="flex flex-col items-center gap-3">
           <div class="w-11 h-11 rounded-lg bg-secondary border border-border flex items-center justify-center text-primary shadow-sm">
-            <i data-lucide="network" class="w-5 h-5"></i>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-5 h-5">
+              <circle cx="12" cy="5" r="2.5"/>
+              <circle cx="4.5" cy="19" r="2.5"/>
+              <circle cx="19.5" cy="19" r="2.5"/>
+              <path d="M12 7.5v4m0 0-6 5m6-5 6 5"/>
+            </svg>
           </div>
           <div class="text-center">
             <h1 class="font-display text-xl font-bold tracking-widest uppercase text-foreground">
