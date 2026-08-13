@@ -8,6 +8,42 @@ from app.database import execute as db_execute, fetch as db_fetch, fetchrow as d
 
 load_dotenv()
 
+
+def reload_models_from_env():
+    """Re-read model lists from .env after they've been updated via /api/models/refresh."""
+    load_dotenv(override=True)
+
+    global KIMCHI_MODELS_RAW, CAVOTI_MODELS_RAW, BLUESMINDS_MODELS_RAW, NARA_MODELS_RAW
+    global DAHL_MODELS_RAW, QWEN_CLOUD_MODELS_RAW, MARKETKU_MODELS_RAW
+    global ATOMESUS_MODELS_RAW, WEIZE_MODELS_RAW
+    global KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS
+    global DAHL_MODELS, QWEN_CLOUD_MODELS, MARKETKU_MODELS
+    global ATOMESUS_MODELS, WEIZE_MODELS
+    global DAHL_MODELS_SHORT, DAHL_MODEL_MAP
+
+    KIMCHI_MODELS_RAW = os.getenv("KIMCHI_MODELS", "")
+    CAVOTI_MODELS_RAW = os.getenv("CAVOTI_MODELS", "")
+    BLUESMINDS_MODELS_RAW = os.getenv("BLUESMINDS_MODELS", "")
+    NARA_MODELS_RAW = os.getenv("NARA_MODELS", "")
+    DAHL_MODELS_RAW = os.getenv("DAHL_MODELS", "")
+    QWEN_CLOUD_MODELS_RAW = os.getenv("QWEN_CLOUD_MODELS", "")
+    MARKETKU_MODELS_RAW = os.getenv("MARKETKU_MODELS", "")
+    ATOMESUS_MODELS_RAW = os.getenv("ATOMESUS_MODELS", "")
+    WEIZE_MODELS_RAW = os.getenv("WEIZE_MODELS", "")
+
+    KIMCHI_MODELS = [m.strip() for m in KIMCHI_MODELS_RAW.split(",") if m.strip()]
+    CAVOTI_MODELS = [m.strip() for m in CAVOTI_MODELS_RAW.split(",") if m.strip()]
+    BLUESMINDS_MODELS = [m.strip() for m in BLUESMINDS_MODELS_RAW.split(",") if m.strip()]
+    NARA_MODELS = [m.strip() for m in NARA_MODELS_RAW.split(",") if m.strip()]
+    DAHL_MODELS = [m.strip() for m in DAHL_MODELS_RAW.split(",") if m.strip()]
+    QWEN_CLOUD_MODELS = [m.strip() for m in QWEN_CLOUD_MODELS_RAW.split(",") if m.strip()]
+    MARKETKU_MODELS = [m.strip() for m in MARKETKU_MODELS_RAW.split(",") if m.strip()]
+    ATOMESUS_MODELS = [m.strip() for m in ATOMESUS_MODELS_RAW.split(",") if m.strip()]
+    WEIZE_MODELS = [m.strip() for m in WEIZE_MODELS_RAW.split(",") if m.strip()]
+
+    DAHL_MODELS_SHORT = [m.split("/", 1)[-1] if "/" in m else m for m in DAHL_MODELS]
+    DAHL_MODEL_MAP = dict(zip(DAHL_MODELS_SHORT, DAHL_MODELS))
+
 DEFAULT_UPSTREAM_URL_RAW = os.getenv("DEFAULT_UPSTREAM_URL")
 if not DEFAULT_UPSTREAM_URL_RAW:
     raise ValueError("DEFAULT_UPSTREAM_URL environment variable is not set")

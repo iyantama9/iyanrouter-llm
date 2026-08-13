@@ -26,9 +26,7 @@ services:
     container_name: llm-router-app
     restart: unless-stopped
     ports:
-      - "80:80"      # HTTP (will redirect to HTTPS)
-      - "443:443"    # HTTPS
-      - "4000:4000"  # HTTP fallback
+      - "4000:4000"  # proxied by host nginx (SSL termination + routers.iyantama.tech)
     environment:
       - DATABASE_URL=postgresql://llm_router_user:llm_router_pass_2024@postgres:5432/llm_router
       - PORT=443
@@ -41,6 +39,7 @@ services:
       - ./app:/app/app
       - ./templates:/app/templates
       - ./ssl:/app/ssl:ro  # Mount SSL certificates (read-only)
+      - ./.env:/app/.env    # so /api/models/refresh writes persist on the host
 
 volumes:
   postgres_data:

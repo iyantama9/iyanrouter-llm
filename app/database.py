@@ -191,12 +191,21 @@ async def setup_tables():
             description TEXT,
             context TEXT,
             outcome TEXT,
+            model_ref VARCHAR(150),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )
     """)
     await execute("""
+        ALTER TABLE brain_decisions ADD COLUMN IF NOT EXISTS model_ref VARCHAR(150)
+    """)
+    await execute("""
         CREATE INDEX IF NOT EXISTS idx_brain_decisions_api_key
         ON brain_decisions(api_key_hash)
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_brain_decisions_model_feedback
+        ON brain_decisions(api_key_hash, decision_type, outcome)
+        WHERE decision_type = 'model_feedback'
     """)
     await execute("""
         CREATE INDEX IF NOT EXISTS idx_brain_decisions_session

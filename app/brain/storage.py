@@ -128,14 +128,75 @@ class BrainStorage:
         context: str = None,
         outcome: str = None,
         decision_type: str = None,
-        session_id: int = None
+        session_id: int = None,
+        model_ref: str = None
     ):
         """Save a decision"""
         await execute("""
             INSERT INTO brain_decisions
-            (api_key_hash, session_id, decision_type, title, description, context, outcome)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-        """, api_key_hash, session_id, decision_type, title, description, context, outcome)
+            (api_key_hash, session_id, decision_type, title, description, context, outcome, model_ref)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        """, api_key_hash, session_id, decision_type, title, description, context, outcome, model_ref)
+
+    @staticmethod
+    async def update_decision_outcome(decision_id: int, outcome: str):
+        """Resolve a previously-logged decision with an observed outcome"""
+        await execute("""
+            UPDATE brain_decisions SET outcome = $1 WHERE id = $2
+        """, outcome, decision_id)
+
+    @staticmethod
+    async def get_latest_unresolved_decision(
+        api_key_hash: str,
+        session_id: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Get the most recent decision in this session that has no outcome yet"""
+        if session_id:
+            row = await fetchrow("""
+                SELECT * FROM brain_decisions
+                WHERE api_key_hash = $1 AND session_id = $2 AND outcome IS NULL
+                    AND decision_type != 'model_feedback'
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, api_key_hash, session_id)
+        else:
+            row = await fetchrow("""
+                SELECT * FROM brain_decisions
+                WHERE api_key_hash = $1 AND outcome IS NULL
+                    AND decision_type != 'model_feedback'
+                ORDER BY created_at DESC
+                LIMIT 1
+            """, api_key_hash)
+
+        return _serialize_row(row) if row else None
+
+    @staticmethod
+    async def get_last_assistant_model(session_id: int) -> Optional[str]:
+        """Get the model used for the most recent assistant reply in a session"""
+        row = await fetchrow("""
+            SELECT model FROM brain_conversations
+            WHERE session_id = $1 AND role = 'assistant' AND model IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+        """, session_id)
+        return row["model"] if row else None
+
+    @staticmethod
+    async def get_avoided_models(api_key_hash: str, limit: int = 20) -> set:
+        """
+        Models that recently received explicit negative feedback from this user.
+        Used to deprioritize (never hard-exclude) candidates in fallback routing.
+        """
+        rows = await fetch("""
+            SELECT DISTINCT model_ref FROM (
+                SELECT model_ref, created_at FROM brain_decisions
+                WHERE api_key_hash = $1 AND decision_type = 'model_feedback'
+                    AND outcome = 'negative' AND model_ref IS NOT NULL
+                ORDER BY created_at DESC
+                LIMIT $2
+            ) recent
+        """, api_key_hash, limit)
+        return {row["model_ref"] for row in rows}
 
     @staticmethod
     async def get_decisions(
@@ -175,6 +236,31 @@ class BrainStorage:
             """, api_key_hash, limit)
 
         return [_serialize_row(row) for row in rows]
+
+    @staticmethod
+    async def save_profile(api_key_hash: str, profile_data: Dict[str, Any]):
+        """Upsert the materialized user profile snapshot"""
+        await execute("""
+            INSERT INTO brain_profiles (api_key_hash, profile_data, updated_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (api_key_hash)
+            DO UPDATE SET profile_data = $2, updated_at = NOW()
+        """, api_key_hash, json.dumps(profile_data))
+
+    @staticmethod
+    async def get_profile(api_key_hash: str) -> Optional[Dict[str, Any]]:
+        """Get the last materialized user profile snapshot, if any"""
+        row = await fetchrow("""
+            SELECT profile_data, updated_at FROM brain_profiles
+            WHERE api_key_hash = $1
+        """, api_key_hash)
+        if not row:
+            return None
+        profile = row["profile_data"]
+        if isinstance(profile, str):
+            profile = json.loads(profile)
+        profile["_cached_at"] = row["updated_at"].isoformat()
+        return profile
 
     @staticmethod
     async def save_fact(

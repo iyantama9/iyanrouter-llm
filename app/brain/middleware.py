@@ -8,11 +8,39 @@ This middleware automatically:
 """
 
 import json
+import time
+import logging
 import hashlib
 from typing import Optional, Dict, Any
 from app.brain.memory import MemoryManager
 from app.brain.decisions import DecisionTracker
 from app.brain.storage import BrainStorage
+
+logger = logging.getLogger("brain")
+
+# In-memory failure counters. Not persisted (a restart resets them) — they exist
+# so a broad try/except doesn't let the brain silently go dark with nothing but
+# stdout to show for it. Surfaced via GET /brain/health.
+_stats = {
+    "context_build_ok": 0,
+    "context_build_errors": 0,
+    "save_ok": 0,
+    "save_errors": 0,
+    "last_error": None,
+    "last_error_at": None,
+}
+
+
+def get_brain_stats() -> Dict[str, Any]:
+    """Snapshot of brain success/failure counters since process start."""
+    return dict(_stats)
+
+
+def _record_error(kind: str, exc: Exception):
+    _stats[f"{kind}_errors"] += 1
+    _stats["last_error"] = f"{kind}: {type(exc).__name__}: {exc}"
+    _stats["last_error_at"] = time.time()
+    logger.exception("[BRAIN] %s failed", kind)
 
 
 class BrainMiddleware:
@@ -53,13 +81,14 @@ class BrainMiddleware:
 
             # Format for injection
             formatted = MemoryManager.format_context_for_injection(context)
+            _stats["context_build_ok"] += 1
 
             if formatted:
                 return f"\n\n<brain_context>\n{formatted}\n</brain_context>"
 
             return None
         except Exception as e:
-            print(f"[BRAIN] Error building context: {e}")
+            _record_error("context_build", e)
             return None
 
     @staticmethod
@@ -130,8 +159,9 @@ class BrainMiddleware:
                 session_id=session_id,
                 role=role
             )
+            _stats["save_ok"] += 1
         except Exception as e:
-            print(f"[BRAIN] Error saving conversation: {e}")
+            _record_error("save", e)
 
     @staticmethod
     def get_api_key_hash(api_key: str) -> str:

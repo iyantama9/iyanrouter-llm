@@ -15,13 +15,13 @@ from app.brain.storage import BrainStorage
 class DecisionTracker:
     """Track decisions and facts from conversations"""
 
-    # Decision keywords/patterns
+    # Decision keywords/patterns, paired with the decision type they signal
     DECISION_PATTERNS = [
-        r"(?i)I (?:decided|chose|selected|picked) (?:to )?(.+)",
-        r"(?i)(?:I'll|I will|Let's) (?:use|go with|implement|choose) (.+)",
-        r"(?i)(?:We|I) (?:should|must|need to) (.+)",
-        r"(?i)Decision: (.+)",
-        r"(?i)(?:My|The) decision is (?:to )?(.+)",
+        (r"(?i)I (?:decided|chose|selected|picked) (?:to )?(.+)", "choice"),
+        (r"(?i)(?:I'll|I will|Let's) (?:use|go with|implement|choose) (.+)", "commitment"),
+        (r"(?i)(?:We|I) (?:should|must|need to) (.+)", "recommendation"),
+        (r"(?i)Decision: (.+)", "explicit"),
+        (r"(?i)(?:My|The) decision is (?:to )?(.+)", "explicit"),
     ]
 
     # Fact patterns (user preferences, information)
@@ -31,6 +31,24 @@ class DecisionTracker:
         r"(?i)I (?:am|work as|do) (.+)",
         r"(?i)I'm using (.+)",
         r"(?i)The project (?:uses|is using|has) (.+)",
+    ]
+
+    # Outcome feedback patterns - signal whether the previous exchange landed well.
+    # Matched against the user's *next* message, in English and Indonesian.
+    NEGATIVE_OUTCOME_PATTERNS = [
+        r"(?i)\bthat('?s| is)? (?:wrong|bad|broken|incorrect|not right)\b",
+        r"(?i)\b(?:doesn'?t|didn'?t|isn'?t|not) work(?:ing)?\b",
+        r"(?i)\bstill (?:broken|failing|wrong|not working)\b",
+        r"(?i)\b(?:revert|undo|roll ?back) (?:that|this|it)\b",
+        r"(?i)\b(?:salah|gagal|keliru|error lagi|masih error|nggak jalan|tidak jalan|nggak bisa)\b",
+        r"(?i)\bbalikin (?:aja|ke|semula)\b",
+    ]
+    POSITIVE_OUTCOME_PATTERNS = [
+        r"(?i)\bthat('?s| is)? (?:great|perfect|correct|working|fixed|good)\b",
+        r"(?i)\bworks? now\b",
+        r"(?i)\bfixed it\b",
+        r"(?i)\bthanks?,? that (?:worked|fixed it)\b",
+        r"(?i)\b(?:mantap|berhasil|jalan sekarang|udah (?:jalan|bener|betul)|makasih.*(?:jalan|berhasil))\b",
     ]
 
     @staticmethod
@@ -74,7 +92,7 @@ class DecisionTracker:
         """
         decisions = []
 
-        for pattern in DecisionTracker.DECISION_PATTERNS:
+        for pattern, decision_type in DecisionTracker.DECISION_PATTERNS:
             matches = re.findall(pattern, content)
             for match in matches:
                 decision_text = match.strip()
@@ -83,7 +101,7 @@ class DecisionTracker:
                         "title": decision_text[:200],  # Truncate long titles
                         "description": None,
                         "context": content[:500],  # Save context
-                        "type": "explicit"
+                        "type": decision_type
                     })
 
         return decisions
@@ -166,6 +184,63 @@ class DecisionTracker:
             return "general"
 
     @staticmethod
+    def detect_outcome_feedback(content: str) -> Optional[str]:
+        """
+        Check whether a message expresses positive or negative feedback about
+        whatever came right before it (typically the previous assistant reply).
+
+        Returns "negative", "positive", or None.
+        """
+        for pattern in DecisionTracker.NEGATIVE_OUTCOME_PATTERNS:
+            if re.search(pattern, content):
+                return "negative"
+        for pattern in DecisionTracker.POSITIVE_OUTCOME_PATTERNS:
+            if re.search(pattern, content):
+                return "positive"
+        return None
+
+    @staticmethod
+    async def apply_outcome_feedback(
+        content: str,
+        api_key_hash: str,
+        session_id: int
+    ):
+        """
+        If this message reads as feedback on the previous exchange, close the
+        loop: resolve the latest open decision in this session, and — since we
+        know which model actually answered — log a model_feedback decision so
+        routing can learn which models this user has had bad luck with.
+        """
+        sentiment = DecisionTracker.detect_outcome_feedback(content)
+        if not sentiment:
+            return
+
+        # Resolve the most recent still-open decision for this session, if any.
+        open_decision = await BrainStorage.get_latest_unresolved_decision(
+            api_key_hash=api_key_hash,
+            session_id=session_id
+        )
+        if open_decision:
+            await BrainStorage.update_decision_outcome(open_decision["id"], sentiment)
+
+        # Tie the feedback to the model that produced the previous reply.
+        last_model = await BrainStorage.get_last_assistant_model(session_id)
+        if not last_model:
+            return
+
+        model_ref = last_model.split("/", 1)[1] if "/" in last_model else last_model
+        await BrainStorage.save_decision(
+            api_key_hash=api_key_hash,
+            session_id=session_id,
+            decision_type="model_feedback",
+            title=f"Model {last_model} received {sentiment} feedback",
+            description=None,
+            context=content[:300],
+            outcome=sentiment,
+            model_ref=model_ref
+        )
+
+    @staticmethod
     async def analyze_conversation(
         content: str,
         api_key_hash: str,
@@ -189,7 +264,8 @@ class DecisionTracker:
             role=role
         )
 
-        # Extract and save facts (primarily from user messages)
+        # Extract and save facts, resolve outcomes, and refresh the cached
+        # profile — all from the user's side of the conversation.
         if role == "user":
             await DecisionTracker.extract_and_save_facts(
                 content=content,
@@ -197,14 +273,22 @@ class DecisionTracker:
                 session_id=session_id,
                 role=role
             )
+            await DecisionTracker.apply_outcome_feedback(
+                content=content,
+                api_key_hash=api_key_hash,
+                session_id=session_id
+            )
+            await DecisionTracker.get_user_profile(api_key_hash, persist=True)
 
     @staticmethod
-    async def get_user_profile(api_key_hash: str) -> Dict[str, Any]:
+    async def get_user_profile(api_key_hash: str, persist: bool = False) -> Dict[str, Any]:
         """
         Build a user profile from extracted facts.
 
         Args:
             api_key_hash: User's API key hash
+            persist: Also upsert the result into brain_profiles as a materialized
+                cache (called after every user turn so the table stays live).
 
         Returns:
             User profile dictionary
@@ -236,5 +320,11 @@ class DecisionTracker:
         )
 
         profile["recent_decisions"] = decisions[:10]
+
+        # Model preference signal, surfaced from closed-loop feedback.
+        profile["avoided_models"] = sorted(await BrainStorage.get_avoided_models(api_key_hash))
+
+        if persist:
+            await BrainStorage.save_profile(api_key_hash, profile)
 
         return profile

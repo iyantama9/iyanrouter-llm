@@ -11,7 +11,6 @@ import app.config as config_module
 from app.config import (
     KIMCHI_BASE_URL, CAVOTI_BASE_URL, BLUESMINDS_BASE_URL, NARA_BASE_URL, DAHL_BASE_URL,
     QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL, ATOMESUS_BASE_URL, WEIZE_BASE_URL, ROUTER_PASSWORD,
-    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS_SHORT, QWEN_CLOUD_MODELS, MARKETKU_MODELS, ATOMESUS_MODELS, WEIZE_MODELS,
     recent_requests,
     add_api_key, remove_api_key, reset_key_status, get_masked_keys, set_active_key,
     SESSION_SECRET, ADMIN_USERNAME, verify_admin_password, get_paginated_logs,
@@ -219,15 +218,15 @@ async def api_set_active_key(payload: dict = Body(...), user: None = Depends(req
 @router.get("/api/models")
 async def api_get_models(user: None = Depends(require_auth)):
     return {
-        "kimchi": [f"kc/{m}" for m in KIMCHI_MODELS],
-        "cavoti": [f"cv/{m}" for m in CAVOTI_MODELS],
-        "bluesminds": [f"bm/{m}" for m in BLUESMINDS_MODELS],
-        "bynara": [f"nry/{m}" for m in NARA_MODELS],
-        "dahl": [f"dh/{m}" for m in DAHL_MODELS_SHORT],
-        "qwen_cloud": [f"qc/{m}" for m in QWEN_CLOUD_MODELS],
-        "marketku": [f"mk/{m}" for m in MARKETKU_MODELS],
-        "atomesus": [f"at/{m}" for m in ATOMESUS_MODELS],
-        "weize": WEIZE_MODELS,
+        "kimchi": [f"kc/{m}" for m in config_module.KIMCHI_MODELS],
+        "cavoti": [f"cv/{m}" for m in config_module.CAVOTI_MODELS],
+        "bluesminds": [f"bm/{m}" for m in config_module.BLUESMINDS_MODELS],
+        "bynara": [f"nry/{m}" for m in config_module.NARA_MODELS],
+        "dahl": [f"dh/{m}" for m in config_module.DAHL_MODELS_SHORT],
+        "qwen_cloud": [f"qc/{m}" for m in config_module.QWEN_CLOUD_MODELS],
+        "marketku": [f"mk/{m}" for m in config_module.MARKETKU_MODELS],
+        "atomesus": [f"at/{m}" for m in config_module.ATOMESUS_MODELS],
+        "weize": config_module.WEIZE_MODELS,
     }
 
 
@@ -238,6 +237,7 @@ async def api_refresh_models(user: None = Depends(require_auth)):
 
     updated_count = 0
     updates = {}
+    errors = {}
 
     # Provider to base_url mapping
     provider_base_urls = {
@@ -265,6 +265,20 @@ async def api_refresh_models(user: None = Depends(require_auth)):
         "weize": "WEIZE_MODELS",
     }
 
+    # Provider to routing prefix mapping (used to strip self-namespaced ids
+    # some providers return, e.g. marketku returns "mk/auto" instead of "auto")
+    provider_prefixes = {
+        "kc": "kc",
+        "cv": "cv",
+        "bm": "bm",
+        "nry": "nry",
+        "dahl": "dh",
+        "qc": "qc",
+        "marketku": "mk",
+        "atomesus": "at",
+        "weize": "wz",
+    }
+
     async with httpx.AsyncClient(timeout=10.0) as client:
         # Get distinct providers from api_keys
         providers = await fetch("SELECT DISTINCT provider FROM api_keys ORDER BY provider")
@@ -275,6 +289,7 @@ async def api_refresh_models(user: None = Depends(require_auth)):
             env_var = provider_env_vars.get(provider)
 
             if not base_url or not env_var:
+                errors[provider] = "No base URL or env var configured"
                 continue
 
             try:
@@ -285,6 +300,7 @@ async def api_refresh_models(user: None = Depends(require_auth)):
                 )
 
                 if not key_row:
+                    errors[provider] = "No API key found in database"
                     continue
 
                 api_key = key_row["key_value"]
@@ -297,17 +313,29 @@ async def api_refresh_models(user: None = Depends(require_auth)):
                     data = r.json()
                     models = [m["id"] for m in data.get("data", [])]
 
+                    # Some providers return model ids already namespaced with
+                    # our own routing prefix (e.g. marketku returns "mk/auto"),
+                    # which would double up once we prefix again for display/dispatch.
+                    prefix = f"{provider_prefixes.get(provider, provider)}/"
+                    models = [m[len(prefix):] if m.startswith(prefix) else m for m in models]
+
                     # Deduplicate
                     models = list(dict.fromkeys(models))
 
                     if models:
                         updates[env_var] = ",".join(models)
                         updated_count += 1
+                        print(f"[REFRESH] {provider}: Found {len(models)} models")
+                    else:
+                        errors[provider] = "No models returned from API"
+                else:
+                    errors[provider] = f"HTTP {r.status_code}: {r.text[:200]}"
+                    print(f"[REFRESH] {provider}: HTTP {r.status_code} - {r.text[:500]}")
 
             except Exception as e:
-                # Log individual provider failures for debugging
-                print(f"[REFRESH] Failed to scan {provider}: {type(e).__name__}: {e}")
-                pass
+                error_msg = f"{type(e).__name__}: {str(e)}"
+                errors[provider] = error_msg
+                print(f"[REFRESH] {provider}: {error_msg}")
 
     # Update .env file
     if updates:
@@ -315,18 +343,39 @@ async def api_refresh_models(user: None = Depends(require_auth)):
         if env_path.exists():
             lines = env_path.read_text().splitlines()
             new_lines = []
+            updated_vars = set()
+
+            # Update existing lines
             for line in lines:
                 updated = False
                 for key, value in updates.items():
                     if line.startswith(f"{key}="):
                         new_lines.append(f"{key}={value}")
+                        updated_vars.add(key)
                         updated = True
                         break
                 if not updated:
                     new_lines.append(line)
-            env_path.write_text("\n".join(new_lines) + "\n")
 
-    return {"success": True, "updated": updated_count, "providers": list(updates.keys())}
+            # Append new vars that weren't in the file
+            for key, value in updates.items():
+                if key not in updated_vars:
+                    new_lines.append(f"{key}={value}")
+
+            env_path.write_text("\n".join(new_lines) + "\n")
+            print(f"[REFRESH] Updated .env with {len(updates)} provider model lists")
+
+        # Reload models in config so changes take effect immediately
+        from app import config
+        config.reload_models_from_env()
+
+    return {
+        "success": True,
+        "updated": updated_count,
+        "providers": list(updates.keys()),
+        "errors": errors,
+        "details": {k: len(v.split(",")) for k, v in updates.items()}
+    }
 
 
 def _json_safe_row(row):

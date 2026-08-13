@@ -17,7 +17,7 @@ from app.brain.semantic import SemanticSearch
 from app.brain.memory import MemoryManager
 from app.brain.decisions import DecisionTracker
 from app.brain.storage import BrainStorage
-from app.brain.middleware import BrainMiddleware
+from app.brain.middleware import BrainMiddleware, get_brain_stats
 
 
 router = APIRouter(prefix="/brain", tags=["brain"])
@@ -50,8 +50,19 @@ def _get_api_key_hash(request: Request) -> Optional[str]:
 
 @router.get("/health")
 async def brain_health():
-    """Brain health check"""
-    return {"status": "ok", "brain": "enabled"}
+    """Brain health check, including live success/failure counters.
+
+    context_build/save errors are swallowed at the call site so a brain
+    outage never breaks a chat request — this is the only place that outage
+    becomes visible instead of just scrolling by in stdout.
+    """
+    stats = get_brain_stats()
+    total_errors = stats["context_build_errors"] + stats["save_errors"]
+    return {
+        "status": "degraded" if total_errors > 0 and stats["last_error_at"] else "ok",
+        "brain": "enabled",
+        "stats": stats,
+    }
 
 
 @router.post("/search/conversations")
@@ -178,7 +189,7 @@ async def get_profile(request: Request):
     if not api_key_hash:
         return JSONResponse(status_code=401, content={"error": "API key required"})
 
-    profile = await DecisionTracker.get_user_profile(api_key_hash)
+    profile = await DecisionTracker.get_user_profile(api_key_hash, persist=True)
 
     return JSONResponse(content=profile)
 

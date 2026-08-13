@@ -12,7 +12,7 @@ import app.config as config_module
 from app.config import (
     DEFAULT_UPSTREAM_URL, CAVOTI_API_KEY, CAVOTI_BASE_URL, BLUESMINDS_API_KEY, BLUESMINDS_BASE_URL,
     ROUTER_PASSWORD, get_current_key, rotate_key, API_KEYS, NARA_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL, ATOMESUS_BASE_URL, WEIZE_BASE_URL,
-    KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS, DAHL_MODELS, DAHL_MODELS_SHORT, resolve_dahl_model, QWEN_CLOUD_MODELS, MARKETKU_MODELS, ATOMESUS_MODELS, WEIZE_MODELS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS, WEIZE_API_KEYS,
+    resolve_dahl_model, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS, WEIZE_API_KEYS,
     get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key, get_current_dahl_key, rotate_dahl_key, get_current_qc_key, rotate_qc_key, get_current_marketku_key, rotate_marketku_key, get_current_atomesus_key, rotate_atomesus_key, get_current_weize_key, rotate_weize_key,
     get_current_qc_key_for_model, rotate_qc_key_for_model, mark_qc_model_exhausted, QC_FALLBACK_ORDER,
     recent_requests, add_request_log,
@@ -27,6 +27,7 @@ from app.translator_openai import (
 from app.sse import sse_broadcaster
 from app.brain.middleware import BrainMiddleware
 from app.brain.memory import MemoryManager
+from app.brain.storage import BrainStorage
 from app.database import verify_router_api_key
 
 
@@ -209,23 +210,23 @@ async def list_models(request: Request):
         return JSONResponse(status_code=401, content={"error": {"message": "Invalid router password."}})
 
     models = []
-    for m in KIMCHI_MODELS:
+    for m in config_module.KIMCHI_MODELS:
         models.append(f"kc/{m}")
-    for m in CAVOTI_MODELS:
+    for m in config_module.CAVOTI_MODELS:
         models.append(f"cv/{m}")
-    for m in BLUESMINDS_MODELS:
+    for m in config_module.BLUESMINDS_MODELS:
         models.append(f"bm/{m}")
-    for m in NARA_MODELS:
+    for m in config_module.NARA_MODELS:
         models.append(f"nry/{m}")
-    for m in DAHL_MODELS:
+    for m in config_module.DAHL_MODELS:
         models.append(f"dh/{m}")
-    for m in QWEN_CLOUD_MODELS:
+    for m in config_module.QWEN_CLOUD_MODELS:
         models.append(f"qc/{m}")
-    for m in MARKETKU_MODELS:
+    for m in config_module.MARKETKU_MODELS:
         models.append(f"mk/{m}")
-    for m in ATOMESUS_MODELS:
+    for m in config_module.ATOMESUS_MODELS:
         models.append(f"at/{m}")
-    for m in WEIZE_MODELS:
+    for m in config_module.WEIZE_MODELS:
         models.append(f"wz/{m}")
 
     data = []
@@ -281,23 +282,23 @@ async def messages(request: Request):
 
     provider = "kc"
     if payload.get("model"):
-        if payload["model"].startswith("cv/") or payload["model"] in CAVOTI_MODELS:
+        if payload["model"].startswith("cv/") or payload["model"] in config_module.CAVOTI_MODELS:
             provider = "cv"
-        elif payload["model"].startswith("bm/") or payload["model"] in BLUESMINDS_MODELS:
+        elif payload["model"].startswith("bm/") or payload["model"] in config_module.BLUESMINDS_MODELS:
             provider = "bm"
-        elif payload["model"].startswith("nry/") or payload["model"] in NARA_MODELS:
+        elif payload["model"].startswith("nry/") or payload["model"] in config_module.NARA_MODELS:
             provider = "nry"
-        elif payload["model"].startswith("dh/") or payload["model"] in DAHL_MODELS_SHORT:
+        elif payload["model"].startswith("dh/") or payload["model"] in config_module.DAHL_MODELS_SHORT:
             provider = "dahl"
         elif payload["model"].startswith("qc/"):
             provider = "qc"
-        elif payload["model"].startswith("mk/") or payload["model"] in MARKETKU_MODELS:
+        elif payload["model"].startswith("mk/") or payload["model"] in config_module.MARKETKU_MODELS:
             provider = "marketku"
-        elif payload["model"].startswith("at/") or payload["model"] in ATOMESUS_MODELS:
+        elif payload["model"].startswith("at/") or payload["model"] in config_module.ATOMESUS_MODELS:
             provider = "atomesus"
-        elif payload["model"].startswith("wz/") or payload["model"] in WEIZE_MODELS:
+        elif payload["model"].startswith("wz/") or payload["model"] in config_module.WEIZE_MODELS:
             provider = "weize"
-        elif payload["model"].startswith("kc/") or payload["model"] in KIMCHI_MODELS:
+        elif payload["model"].startswith("kc/") or payload["model"] in config_module.KIMCHI_MODELS:
             provider = "kc"
 
     for prefix in ("kc/", "cv/", "bm/", "nry/", "dh/", "qc/", "mk/", "at/", "wz/"):
@@ -341,8 +342,13 @@ async def messages(request: Request):
         first_user_text = MemoryManager._extract_text_from_content(
             json.dumps(first_user.get("content", "")) if first_user else ""
         )
+        # Normalize whitespace so trivial formatting differences (trailing
+        # newline, double spaces) don't fragment the same thread into two
+        # "sessions". Clients that want real continuity should still send
+        # X-Session-Id explicitly — this is a best-effort fallback only.
+        normalized_first_text = " ".join(first_user_text.split())
         session_id_header = BrainMiddleware.get_api_key_hash(
-            f"{api_key_hash_for_brain}:{first_user_text[:200]}"
+            f"{api_key_hash_for_brain}:{normalized_first_text}"
         )[:16]
 
     from app.database import get_or_create_session, load_session_history
@@ -381,6 +387,18 @@ async def messages(request: Request):
             session_id=session_id,
             enable_brain=enable_brain
         )
+
+    # Brain: models this user has recently given explicit negative feedback
+    # about, via DecisionTracker.apply_outcome_feedback. Used below to
+    # deprioritize (never hard-exclude) candidates when QC does automatic
+    # model fallback, so routing actually learns from past outcomes instead
+    # of only ever producing text for the prompt. Fails open on any error.
+    avoided_qc_models = set()
+    if enable_brain:
+        try:
+            avoided_qc_models = await BrainStorage.get_avoided_models(api_key_hash_for_brain)
+        except Exception as e:
+            print(f"[BRAIN] Error loading avoided models: {e}")
 
     # Brain: Inject brain context into payload
     if brain_context:
@@ -588,10 +606,18 @@ async def messages(request: Request):
                                             continue
                                         fallback = None
                                         for m in QC_FALLBACK_ORDER:
-                                            if m != requested_qc_model and m in QWEN_CLOUD_MODELS:
+                                            if m != requested_qc_model and m in config_module.QWEN_CLOUD_MODELS and m not in avoided_qc_models:
                                                 if any(not config_module.is_qc_model_exhausted(k, m) for k in QC_API_KEYS):
                                                     fallback = m
                                                     break
+                                        if not fallback:
+                                            # Nothing outside the brain's avoid-list is available; fall
+                                            # back to it rather than failing the request outright.
+                                            for m in QC_FALLBACK_ORDER:
+                                                if m != requested_qc_model and m in config_module.QWEN_CLOUD_MODELS:
+                                                    if any(not config_module.is_qc_model_exhausted(k, m) for k in QC_API_KEYS):
+                                                        fallback = m
+                                                        break
                                         if fallback:
                                             print(f"[LOG] All QC keys exhausted for {requested_qc_model}, falling back to {fallback}")
                                             requested_qc_model = fallback
@@ -853,10 +879,18 @@ async def messages(request: Request):
                         # All keys exhausted for this model; try fallback model.
                         fallback = None
                         for m in QC_FALLBACK_ORDER:
-                            if m != requested_qc_model and m in QWEN_CLOUD_MODELS:
+                            if m != requested_qc_model and m in config_module.QWEN_CLOUD_MODELS and m not in avoided_qc_models:
                                 if any(not config_module.is_qc_model_exhausted(k, m) for k in QC_API_KEYS):
                                     fallback = m
                                     break
+                        if not fallback:
+                            # Nothing outside the brain's avoid-list is available; fall
+                            # back to it rather than failing the request outright.
+                            for m in QC_FALLBACK_ORDER:
+                                if m != requested_qc_model and m in config_module.QWEN_CLOUD_MODELS:
+                                    if any(not config_module.is_qc_model_exhausted(k, m) for k in QC_API_KEYS):
+                                        fallback = m
+                                        break
                         if fallback:
                             print(f"[LOG] All QC keys exhausted for {requested_qc_model}, falling back to {fallback}")
                             requested_qc_model = fallback
@@ -1017,23 +1051,23 @@ async def chat_completions(request: Request):
     print(f"[CHAT-COMPLETIONS] Model: {requested_model}, stream: {payload.get('stream')}", flush=True)
     provider = "cv"
 
-    if requested_model.startswith("cv/") or requested_model in CAVOTI_MODELS:
+    if requested_model.startswith("cv/") or requested_model in config_module.CAVOTI_MODELS:
         provider = "cv"
-    elif requested_model.startswith("bm/") or requested_model in BLUESMINDS_MODELS:
+    elif requested_model.startswith("bm/") or requested_model in config_module.BLUESMINDS_MODELS:
         provider = "bm"
-    elif requested_model.startswith("nry/") or requested_model in NARA_MODELS:
+    elif requested_model.startswith("nry/") or requested_model in config_module.NARA_MODELS:
         provider = "nry"
-    elif requested_model.startswith("dh/") or requested_model in DAHL_MODELS_SHORT:
+    elif requested_model.startswith("dh/") or requested_model in config_module.DAHL_MODELS_SHORT:
         provider = "dahl"
     elif requested_model.startswith("qc/"):
         provider = "qc"
-    elif requested_model.startswith("mk/") or requested_model in MARKETKU_MODELS:
+    elif requested_model.startswith("mk/") or requested_model in config_module.MARKETKU_MODELS:
         provider = "marketku"
-    elif requested_model.startswith("at/") or requested_model in ATOMESUS_MODELS:
+    elif requested_model.startswith("at/") or requested_model in config_module.ATOMESUS_MODELS:
         provider = "atomesus"
-    elif requested_model.startswith("wz/") or requested_model in WEIZE_MODELS:
+    elif requested_model.startswith("wz/") or requested_model in config_module.WEIZE_MODELS:
         provider = "weize"
-    elif requested_model.startswith("kc/") or requested_model in KIMCHI_MODELS:
+    elif requested_model.startswith("kc/") or requested_model in config_module.KIMCHI_MODELS:
         provider = "kc"
 
     provider_prefixes = {
