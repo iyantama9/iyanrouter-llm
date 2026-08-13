@@ -501,19 +501,41 @@
           <!-- Main Chat Area -->
           <div class="flex-1 flex flex-col min-w-0">
             <!-- Model selector bar -->
-            <div class="p-3 border-b border-border flex items-center justify-between shrink-0 gap-3">
-              <select x-model="pg.model"
-                      class="bg-secondary border border-border rounded-xl px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground flex-1 max-w-xs">
-                <template x-for="m in pg.models.kimchi"    :key="'kc'+m"><option :value="m" x-text="'[Kimchi] ' + m"></option></template>
-                <template x-for="m in pg.models.cavoti"    :key="'cv'+m"><option :value="m" x-text="'[Cavoti] ' + m"></option></template>
-                <template x-for="m in pg.models.bluesminds":key="'bm'+m"><option :value="m" x-text="'[Bluesminds] ' + m"></option></template>
-                <template x-for="m in pg.models.bynara"    :key="'nry'+m"><option :value="m" x-text="'[byNara] ' + m"></option></template>
-                <template x-for="m in pg.models.dahl"      :key="'dh'+m"><option :value="m" x-text="'[Dahl] ' + m.replace('dh/','')"></option></template>
-                <template x-for="m in pg.models.qwen_cloud" :key="'qc'+m"><option :value="m" x-text="'[Qwen] ' + m.replace('qc/','')"></option></template>
-                <template x-for="m in pg.models.marketku" :key="'mk'+m"><option :value="m" x-text="'[MarketKu] ' + m.replace('mk/','')"></option></template>
-                <template x-for="m in pg.models.atomesus" :key="'at'+m"><option :value="m" x-text="'[Atomesus] ' + m.replace('at/','')"></option></template>
-                <template x-for="m in pg.models.weize" :key="'wz'+m"><option :value="m" x-text="'[Weize] ' + m"></option></template>
-              </select>
+            <div class="p-3 border-b border-border flex items-center justify-between shrink-0 gap-3 min-w-0">
+              <div class="relative flex-1 min-w-0 max-w-xs" @click.outside="pg.modelDropdownOpen = false">
+                <button type="button" @click="pg.modelDropdownOpen ? (pg.modelDropdownOpen = false) : openModelDropdown()"
+                        class="w-full bg-secondary border border-border rounded-xl px-3 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground flex items-center justify-between gap-2">
+                  <span class="truncate" x-text="selectedModelLabel()"></span>
+                  <i data-lucide="chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform duration-150"
+                     :class="pg.modelDropdownOpen ? 'rotate-180' : ''"></i>
+                </button>
+
+                <div x-show="pg.modelDropdownOpen" x-transition.opacity.duration.100ms
+                     class="absolute z-30 mt-1.5 w-[min(22rem,90vw)] bg-card border border-border rounded-xl shadow-xl shadow-black/30 overflow-hidden">
+                  <div class="p-2 border-b border-border">
+                    <input type="text" x-ref="modelSearchInput" x-model="pg.modelSearch"
+                           @keydown.escape="pg.modelDropdownOpen = false"
+                           placeholder="Search models…"
+                           class="w-full bg-secondary border border-border rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground placeholder:text-muted-foreground/50">
+                  </div>
+                  <div class="max-h-72 overflow-y-auto py-1">
+                    <template x-for="group in filteredModelGroups()" :key="group.key">
+                      <div>
+                        <div class="px-3 pt-2 pb-1 text-[9px] font-700 uppercase tracking-[0.12em] text-muted-foreground/70 font-mono" x-text="group.label"></div>
+                        <template x-for="opt in group.options" :key="group.key + ':' + opt.value">
+                          <button type="button" @click="selectModel(opt.value)"
+                                  class="w-full text-left px-3 py-1.5 text-xs font-mono truncate transition-colors"
+                                  :class="pg.model === opt.value ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-secondary'"
+                                  x-text="opt.label"></button>
+                        </template>
+                      </div>
+                    </template>
+                    <template x-if="filteredModelGroups().length === 0">
+                      <div class="px-3 py-6 text-center text-xs text-muted-foreground">No models match your search</div>
+                    </template>
+                  </div>
+                </div>
+              </div>
               <button @click="pg.messages = []"
                       class="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5 shrink-0">
                 <i data-lucide="eraser" class="w-3.5 h-3.5"></i> Clear
@@ -1089,7 +1111,9 @@ function dashboard() {
       sessionId: null,
       editingSessionId: null,
       editingSessionName: '',
-      attachedFile: null
+      attachedFile: null,
+      modelDropdownOpen: false,
+      modelSearch: ''
     },
 
     brain: {
@@ -1589,6 +1613,54 @@ function dashboard() {
     renderMarkdown(txt) {
       if (!window.marked || !window.DOMPurify) return txt;
       return DOMPurify.sanitize(marked.parse(txt));
+    },
+
+    // ── Playground model picker ──
+    // pg.models values already carry whatever prefix routing needs per
+    // provider (some do, some rely on plain list membership) — this just
+    // formats them for display, it never changes the underlying value.
+    MODEL_GROUP_DEFS: [
+      ['kimchi', 'Kimchi', m => m],
+      ['cavoti', 'Cavoti', m => m],
+      ['bluesminds', 'Bluesminds', m => m],
+      ['bynara', 'byNara', m => m],
+      ['dahl', 'Dahl', m => m.replace('dh/', '')],
+      ['qwen_cloud', 'Qwen', m => m.replace('qc/', '')],
+      ['marketku', 'MarketKu', m => m.replace('mk/', '')],
+      ['atomesus', 'Atomesus', m => m.replace('at/', '')],
+      ['weize', 'Weize', m => m],
+    ],
+    modelGroups() {
+      return this.MODEL_GROUP_DEFS
+        .map(([key, label, fmt]) => ({
+          key, label,
+          options: (this.pg.models[key] || []).map(m => ({ value: m, label: fmt(m) }))
+        }))
+        .filter(g => g.options.length > 0);
+    },
+    filteredModelGroups() {
+      const q = this.pg.modelSearch.trim().toLowerCase();
+      const groups = this.modelGroups();
+      if (!q) return groups;
+      return groups
+        .map(g => ({ ...g, options: g.options.filter(o => `${g.label} ${o.label}`.toLowerCase().includes(q)) }))
+        .filter(g => g.options.length > 0);
+    },
+    selectedModelLabel() {
+      for (const g of this.modelGroups()) {
+        const found = g.options.find(o => o.value === this.pg.model);
+        if (found) return `[${g.label}] ${found.label}`;
+      }
+      return this.pg.model || 'Select a model';
+    },
+    openModelDropdown() {
+      this.pg.modelDropdownOpen = true;
+      this.$nextTick(() => this.$refs.modelSearchInput?.focus());
+    },
+    selectModel(value) {
+      this.pg.model = value;
+      this.pg.modelDropdownOpen = false;
+      this.pg.modelSearch = '';
     },
 
     async fetchSessions() {
