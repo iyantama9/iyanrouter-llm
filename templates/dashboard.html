@@ -1632,8 +1632,10 @@ function dashboard() {
                 txt = parsed.map(p => {
                   if (p.type === 'text') return p.text;
                   if (p.type === 'image' && p.source) return `![Attached Image](data:${p.source.media_type};base64,${p.source.data})`;
-                  return '[Unsupported Attachment]';
-                }).join('\n\n');
+                  // thinking blocks, tool calls, etc. aren't renderable here —
+                  // drop them quietly instead of spamming a placeholder string.
+                  return null;
+                }).filter(Boolean).join('\n\n');
               }
             } catch {}
             return { role: m.role, content: txt };
@@ -1749,10 +1751,22 @@ function dashboard() {
           })
         });
 
+        if (!r.ok) {
+          let detail = `HTTP ${r.status}`;
+          try {
+            const errBody = await r.json();
+            detail = errBody?.error?.message || errBody?.error || detail;
+          } catch {}
+          this.toast(`Chat failed: ${detail}`, 'error');
+          return;
+        }
+
         this.pg.messages.push({ role: 'assistant', content: '' });
         const reader = r.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let gotContent = false;
+        let streamError = null;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -1765,8 +1779,10 @@ function dashboard() {
             if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
               try {
                 const d = JSON.parse(trimmed.slice(6));
+                if (d.error) { streamError = d.error.message || 'Upstream error'; continue; }
                 const content = (d.choices?.[0]?.delta?.content) || (d.type === 'content_block_delta' && d.delta?.text) || null;
                 if (content) {
+                  gotContent = true;
                   this.pg.messages[this.pg.messages.length - 1].content += content;
                   this.$nextTick(() => {
                     const c = document.getElementById('chat-container');
@@ -1776,6 +1792,13 @@ function dashboard() {
               } catch {}
             }
           }
+        }
+
+        // Nothing streamed back (e.g. a mid-stream error) — don't leave a
+        // permanently blank bubble sitting in the transcript.
+        if (!gotContent) {
+          this.pg.messages.pop();
+          this.toast(streamError ? `Chat failed: ${streamError}` : 'No response received', 'error');
         }
 
         this.fetchSessions();

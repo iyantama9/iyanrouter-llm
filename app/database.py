@@ -127,6 +127,24 @@ async def setup_tables():
         CREATE INDEX IF NOT EXISTS idx_sessions_api_key
         ON chat_sessions(api_key_hash)
     """)
+    # Distinguish real router traffic (auto-created by get_or_create_session,
+    # always carries a project_identifier) from sessions the admin actually
+    # started in the Playground UI, so the two never share one list again.
+    await execute("""
+        ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS source VARCHAR(20)
+    """)
+    await execute("""
+        UPDATE chat_sessions
+        SET source = CASE WHEN project_identifier IS NULL THEN 'playground' ELSE 'api' END
+        WHERE source IS NULL
+    """)
+    await execute("""
+        ALTER TABLE chat_sessions ALTER COLUMN source SET DEFAULT 'api'
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_sessions_source
+        ON chat_sessions(source)
+    """)
 
     # ── Brain Tables ──
     await execute("""
@@ -269,23 +287,36 @@ async def setup_tables():
 
 
 # ── Chat Session Helpers ──
+# These back the Playground UI only. Real router traffic sessions (created by
+# get_or_create_session for /v1/messages continuity) share the same table but
+# are tagged source='api' and deliberately excluded here.
 async def get_chat_sessions():
-    return await fetch("SELECT * FROM chat_sessions ORDER BY updated_at DESC")
+    return await fetch("SELECT * FROM chat_sessions WHERE source = 'playground' ORDER BY updated_at DESC")
 
 async def get_chat_session(session_id: int):
-    return await fetchrow("SELECT * FROM chat_sessions WHERE id = $1", session_id)
+    return await fetchrow("SELECT * FROM chat_sessions WHERE id = $1 AND source = 'playground'", session_id)
 
 async def create_chat_session(name: str):
-    return await fetchrow("INSERT INTO chat_sessions (name) VALUES ($1) RETURNING *", name)
+    return await fetchrow(
+        "INSERT INTO chat_sessions (name, source) VALUES ($1, 'playground') RETURNING *", name
+    )
 
 async def update_chat_session(session_id: int, name: str):
-    return await fetchrow("UPDATE chat_sessions SET name = $1, updated_at = NOW() WHERE id = $2 RETURNING *", name, session_id)
+    return await fetchrow(
+        "UPDATE chat_sessions SET name = $1, updated_at = NOW() WHERE id = $2 AND source = 'playground' RETURNING *",
+        name, session_id
+    )
 
 async def delete_chat_session(session_id: int):
-    await execute("DELETE FROM chat_sessions WHERE id = $1", session_id)
+    await execute("DELETE FROM chat_sessions WHERE id = $1 AND source = 'playground'", session_id)
 
 async def get_chat_messages(session_id: int):
-    return await fetch("SELECT * FROM chat_messages WHERE session_id = $1 ORDER BY id ASC", session_id)
+    return await fetch("""
+        SELECT m.* FROM chat_messages m
+        JOIN chat_sessions s ON s.id = m.session_id
+        WHERE m.session_id = $1 AND s.source = 'playground'
+        ORDER BY m.id ASC
+    """, session_id)
 
 async def save_chat_message(session_id: int, role: str, content: str):
     await execute("UPDATE chat_sessions SET updated_at = NOW() WHERE id = $1", session_id)
