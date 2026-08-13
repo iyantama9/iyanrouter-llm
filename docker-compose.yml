@@ -29,7 +29,10 @@ services:
       - "4000:4000"  # proxied by host nginx (SSL termination + routers.iyantama.tech)
     environment:
       - DATABASE_URL=postgresql://llm_router_user:llm_router_pass_2024@postgres:5432/llm_router
-      - PORT=443
+      # Must match the port uvicorn actually binds (see Dockerfile CMD). Playground
+      # calls http://127.0.0.1:$PORT/v1/messages internally, so a mismatch here
+      # breaks the Playground with "All connection attempts failed".
+      - PORT=4000
     env_file:
       - .env
     depends_on:

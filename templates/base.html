@@ -86,7 +86,7 @@
       --secondary: 0 0% 11%;
       --secondary-foreground: 0 0% 92%;
       --muted: 0 0% 11%;
-      --muted-foreground: 0 0% 42%;
+      --muted-foreground: 0 0% 65%;
       --accent: 158 50% 38%;
       --accent-foreground: 0 0% 4%;
       --destructive: 0 72% 51%;
@@ -139,6 +139,22 @@
 
     @media (prefers-reduced-motion: reduce) {
       body, .grid-bg { animation: none; }
+    }
+
+    /* Force readable body text in rendered markdown regardless of whether the
+       Tailwind Typography plugin loaded from the CDN build — it isn't
+       guaranteed, and its default palette runs dimmer than our tokens. */
+    .prose {
+      color: hsl(var(--foreground));
+    }
+    .prose :where(p, li, strong, b, em, blockquote, h1, h2, h3, h4, h5, h6, td, th) {
+      color: inherit;
+    }
+    .prose code {
+      color: hsl(var(--foreground));
+    }
+    .prose a {
+      color: hsl(var(--primary));
     }
 
     ::-webkit-scrollbar { width: 5px; height: 5px; }

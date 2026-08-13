@@ -1737,6 +1737,10 @@ function dashboard() {
         if (c) c.scrollTop = c.scrollHeight;
       });
 
+      let pushedAssistant = false;
+      let gotContent = false;
+      let streamError = null;
+
       try {
         const r = await fetch('/api/playground/chat', {
           method: 'POST',
@@ -1757,54 +1761,54 @@ function dashboard() {
             const errBody = await r.json();
             detail = errBody?.error?.message || errBody?.error || detail;
           } catch {}
-          this.toast(`Chat failed: ${detail}`, 'error');
-          return;
-        }
+          streamError = detail;
+        } else {
+          this.pg.messages.push({ role: 'assistant', content: '' });
+          pushedAssistant = true;
+          const reader = r.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = '';
 
-        this.pg.messages.push({ role: 'assistant', content: '' });
-        const reader = r.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        let gotContent = false;
-        let streamError = null;
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
-              try {
-                const d = JSON.parse(trimmed.slice(6));
-                if (d.error) { streamError = d.error.message || 'Upstream error'; continue; }
-                const content = (d.choices?.[0]?.delta?.content) || (d.type === 'content_block_delta' && d.delta?.text) || null;
-                if (content) {
-                  gotContent = true;
-                  this.pg.messages[this.pg.messages.length - 1].content += content;
-                  this.$nextTick(() => {
-                    const c = document.getElementById('chat-container');
-                    if (c) c.scrollTop = c.scrollHeight;
-                  });
-                }
-              } catch {}
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop();
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
+                try {
+                  const d = JSON.parse(trimmed.slice(6));
+                  if (d.error) { streamError = d.error.message || 'Upstream error'; continue; }
+                  const content = (d.choices?.[0]?.delta?.content) || (d.type === 'content_block_delta' && d.delta?.text) || null;
+                  if (content) {
+                    gotContent = true;
+                    this.pg.messages[this.pg.messages.length - 1].content += content;
+                    this.$nextTick(() => {
+                      const c = document.getElementById('chat-container');
+                      if (c) c.scrollTop = c.scrollHeight;
+                    });
+                  }
+                } catch {}
+              }
             }
           }
-        }
 
-        // Nothing streamed back (e.g. a mid-stream error) — don't leave a
-        // permanently blank bubble sitting in the transcript.
-        if (!gotContent) {
+          this.fetchSessions();
+        }
+      } catch (err) {
+        streamError = streamError || err?.message || 'Network error';
+      } finally {
+        // Whatever path we took — success, HTTP error, or a mid-stream
+        // exception — never leave a permanently blank assistant bubble
+        // sitting in the transcript with no explanation.
+        if (pushedAssistant && !gotContent) {
           this.pg.messages.pop();
+        }
+        if (!gotContent) {
           this.toast(streamError ? `Chat failed: ${streamError}` : 'No response received', 'error');
         }
-
-        this.fetchSessions();
-
-      } catch { this.toast('Chat failed', 'error'); }
-      finally {
         this.pg.loading = false;
         this.$nextTick(() => { if (window.lucide) window.lucide.createIcons(); });
       }
