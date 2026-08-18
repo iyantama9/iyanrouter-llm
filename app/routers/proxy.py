@@ -1031,6 +1031,77 @@ async def messages(request: Request):
     )
 
 
+def _aggregate_openai_sse(raw_text: str, fallback_model: str):
+    """
+    Reconstruct a normal chat.completion object from an SSE response body.
+
+    Some upstreams ignore `stream: false` under certain conditions (large
+    prompts, particular models) and stream anyway. resp.json() then fails,
+    and without this the raw SSE text used to get dumped verbatim into an
+    "error" field on an otherwise-200 response. Returns None if the text
+    doesn't look like SSE data at all, so the caller can fall back to
+    reporting a real error.
+    """
+    content_parts = []
+    tool_calls = {}
+    finish_reason = "stop"
+    model_name = None
+    usage = None
+    saw_data = False
+
+    for line in raw_text.split("\n"):
+        line = line.strip()
+        if not line.startswith("data: "):
+            continue
+        data_str = line[6:].strip()
+        if data_str == "[DONE]":
+            continue
+        try:
+            chunk = json.loads(data_str)
+        except Exception:
+            continue
+        saw_data = True
+        model_name = chunk.get("model") or model_name
+        if chunk.get("usage"):
+            usage = chunk["usage"]
+        choices = chunk.get("choices") or []
+        if not choices:
+            continue
+        choice = choices[0]
+        if choice.get("finish_reason"):
+            finish_reason = choice["finish_reason"]
+        delta = choice.get("delta") or {}
+        if delta.get("content"):
+            content_parts.append(delta["content"])
+        for tc in delta.get("tool_calls") or []:
+            idx = tc.get("index", 0)
+            slot = tool_calls.setdefault(idx, {"id": tc.get("id"), "type": "function", "function": {"name": "", "arguments": ""}})
+            if tc.get("id"):
+                slot["id"] = tc["id"]
+            fn = tc.get("function") or {}
+            if fn.get("name"):
+                slot["function"]["name"] += fn["name"]
+            if fn.get("arguments"):
+                slot["function"]["arguments"] += fn["arguments"]
+
+    if not saw_data:
+        return None
+
+    message = {"role": "assistant", "content": "".join(content_parts) or None}
+    if tool_calls:
+        message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
+        finish_reason = "tool_calls"
+
+    return {
+        "id": f"chatcmpl-reconstructed-{int(time.time() * 1000)}",
+        "object": "chat.completion",
+        "created": int(time.time()),
+        "model": model_name or fallback_model,
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+        "usage": usage or {},
+    }
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     """
@@ -1280,12 +1351,23 @@ async def chat_completions(request: Request):
             async with httpx.AsyncClient(timeout=300) as client:
                 resp = await client.post(upstream_endpoint, headers=headers, json=payload)
 
+            effective_status = resp.status_code
             try:
                 content = resp.json()
             except Exception:
-                content = {"error": {"message": resp.text}}
+                aggregated = _aggregate_openai_sse(resp.text, requested_model) if resp.status_code == 200 else None
+                if aggregated is not None:
+                    print(f"[CHAT-COMPLETIONS] {requested_model}: upstream ignored stream=false, reconstructed from SSE", flush=True)
+                    content = aggregated
+                else:
+                    content = {"error": {"message": resp.text}}
+                    if resp.status_code == 200:
+                        # Upstream claimed success but sent something we
+                        # couldn't parse or reconstruct -- don't let that
+                        # masquerade as a real 200 to the client.
+                        effective_status = 502
 
-            if resp.status_code == 200:
+            if effective_status == 200:
                 choice = (content.get("choices") or [{}])[0]
                 message = choice.get("message") or {}
                 assistant_content = message.get("content")
@@ -1315,13 +1397,13 @@ async def chat_completions(request: Request):
                 await sse_broadcaster.broadcast("status", await _build_status_dict())
                 return JSONResponse(content)
 
-            last_status = resp.status_code
+            last_status = effective_status
             last_content = content
-            add_request_log(requested_model, resp.status_code, current_key, True, int((time.time() - start_req_time) * 1000))
-            if resp.status_code in (401, 402, 403, 404, 429, 500, 502, 503, 504) and attempt < len(api_keys_to_use) - 1:
+            add_request_log(requested_model, effective_status, current_key, True, int((time.time() - start_req_time) * 1000))
+            if effective_status in (401, 402, 403, 404, 429, 500, 502, 503, 504) and attempt < len(api_keys_to_use) - 1:
                 rotate()
                 continue
-            return JSONResponse(status_code=resp.status_code, content=content)
+            return JSONResponse(status_code=effective_status, content=content)
         except Exception as e:
             last_status = 500
             last_content = {"error": {"message": str(e)}}
