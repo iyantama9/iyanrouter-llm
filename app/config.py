@@ -535,16 +535,11 @@ def rotate_key(reason: str = "Limited"):
     global current_key_index, failover_count
     if len(API_KEYS) <= 1:
         return get_current_key()
-    old_key = get_current_key()
-    key_statuses[old_key] = reason
-    if reason == "Limited":
-        key_limited_at[old_key] = time.time()
     current_key_index = (current_key_index + 1) % len(API_KEYS)
     new_key = get_current_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
     print(f"[LOG] Rotated kc key → index {current_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
@@ -560,16 +555,11 @@ def rotate_cv_key(reason: str = "Limited"):
     global current_cv_key_index, failover_count
     if len(CV_API_KEYS) <= 1:
         return get_current_cv_key()
-    old_key = get_current_cv_key()
-    key_statuses[old_key] = reason
-    if reason == "Limited":
-        key_limited_at[old_key] = time.time()
     current_cv_key_index = (current_cv_key_index + 1) % len(CV_API_KEYS)
     new_key = get_current_cv_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
     print(f"[LOG] Rotated cv key → index {current_cv_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
@@ -585,16 +575,11 @@ def rotate_bm_key(reason: str = "Limited"):
     global current_bm_key_index, failover_count
     if len(BM_API_KEYS) <= 1:
         return get_current_bm_key()
-    old_key = get_current_bm_key()
-    key_statuses[old_key] = reason
-    if reason == "Limited":
-        key_limited_at[old_key] = time.time()
     current_bm_key_index = (current_bm_key_index + 1) % len(BM_API_KEYS)
     new_key = get_current_bm_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
     print(f"[LOG] Rotated bm key → index {current_bm_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
@@ -610,16 +595,11 @@ def rotate_nr_key(reason: str = "Limited"):
     global current_nr_key_index, failover_count
     if len(NR_API_KEYS) <= 1:
         return get_current_nr_key()
-    old_key = get_current_nr_key()
-    key_statuses[old_key] = reason
-    if reason == "Limited":
-        key_limited_at[old_key] = time.time()
     current_nr_key_index = (current_nr_key_index + 1) % len(NR_API_KEYS)
     new_key = get_current_nr_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
     print(f"[LOG] Rotated nry key → index {current_nr_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
@@ -635,16 +615,11 @@ def rotate_dahl_key(reason: str = "Limited"):
     global current_dahl_key_index, failover_count
     if len(DAHL_API_KEYS) <= 1:
         return get_current_dahl_key()
-    old_key = get_current_dahl_key()
-    key_statuses[old_key] = reason
-    if reason == "Limited":
-        key_limited_at[old_key] = time.time()
     current_dahl_key_index = (current_dahl_key_index + 1) % len(DAHL_API_KEYS)
     new_key = get_current_dahl_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
     print(f"[LOG] Rotated dahl key → index {current_dahl_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
@@ -727,16 +702,11 @@ def rotate_qc_key(reason: str = "Limited"):
     global current_qc_key_index, failover_count
     if len(QC_API_KEYS) <= 1:
         return get_current_qc_key()
-    old_key = get_current_qc_key()
-    key_statuses[old_key] = reason
-    if reason == "Limited":
-        key_limited_at[old_key] = time.time()
     current_qc_key_index = (current_qc_key_index + 1) % len(QC_API_KEYS)
     new_key = get_current_qc_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
     print(f"[LOG] Rotated qc key → index {current_qc_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
@@ -752,16 +722,11 @@ def rotate_marketku_key(reason: str = "Limited"):
     global current_marketku_key_index, failover_count
     if len(MARKETKU_API_KEYS) <= 1:
         return get_current_marketku_key()
-    old_key = get_current_marketku_key()
-    key_statuses[old_key] = reason
-    if reason == "Limited":
-        key_limited_at[old_key] = time.time()
     current_marketku_key_index = (current_marketku_key_index + 1) % len(MARKETKU_API_KEYS)
     new_key = get_current_marketku_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
     print(f"[LOG] Rotated marketku key → index {current_marketku_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
@@ -777,16 +742,11 @@ def rotate_atomesus_key(reason: str = "Limited"):
     global current_atomesus_key_index, failover_count
     if len(ATOMESUS_API_KEYS) <= 1:
         return get_current_atomesus_key()
-    old_key = get_current_atomesus_key()
-    key_statuses[old_key] = reason
-    if reason == "Limited":
-        key_limited_at[old_key] = time.time()
     current_atomesus_key_index = (current_atomesus_key_index + 1) % len(ATOMESUS_API_KEYS)
     new_key = get_current_atomesus_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
     print(f"[LOG] Rotated atomesus key → index {current_atomesus_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
@@ -802,16 +762,11 @@ def rotate_weize_key(reason: str = "Limited"):
     global current_weize_key_index, failover_count
     if len(WEIZE_API_KEYS) <= 1:
         return get_current_weize_key()
-    old_key = get_current_weize_key()
-    key_statuses[old_key] = reason
-    if reason == "Limited":
-        key_limited_at[old_key] = time.time()
     current_weize_key_index = (current_weize_key_index + 1) % len(WEIZE_API_KEYS)
     new_key = get_current_weize_key()
     key_statuses[new_key] = "Active"
     failover_count += 1
     print(f"[LOG] Rotated weize key → index {current_weize_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = $1 WHERE key_value = $2", reason, old_key))
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
