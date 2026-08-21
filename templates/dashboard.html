@@ -389,12 +389,18 @@
                     </td>
                     <td class="px-4 py-3 font-mono text-[11px] text-muted-foreground truncate max-w-[220px]" x-text="p.base_url"></td>
                     <td class="px-4 py-3 text-xs text-muted-foreground" x-text="p.api_format"></td>
-                    <td class="px-4 py-3 text-xs text-muted-foreground" x-text="p.key_count"></td>
+                    <td class="px-4 py-3 text-xs text-muted-foreground" x-text="p.builtin ? p.key_count : `${p.key_count} keys, ${p.model_count ?? 0} models`"></td>
                     <td class="px-4 py-3 text-right">
-                      <button @click="removeProviderAction(p.prefix, p.builtin)" :disabled="providerMgmt.removing === p.prefix"
-                              class="px-3 py-1.5 rounded-xl text-[11px] font-medium transition-colors hover:bg-destructive/8 text-destructive/70 hover:text-destructive border border-destructive/15 hover:border-destructive/30 disabled:opacity-40">
-                        <span x-text="providerMgmt.removing === p.prefix ? 'Removing…' : 'Remove'"></span>
-                      </button>
+                      <div class="flex items-center justify-end gap-2">
+                        <button x-show="!p.builtin" @click="refreshProviderModels(p.prefix)" :disabled="providerMgmt.refreshing === p.prefix"
+                                class="px-3 py-1.5 rounded-xl text-[11px] font-medium transition-colors hover:bg-accent/8 text-accent border border-accent/20 hover:border-accent/40 disabled:opacity-40">
+                          <span x-text="providerMgmt.refreshing === p.prefix ? 'Refreshing…' : 'Refresh Models'"></span>
+                        </button>
+                        <button @click="removeProviderAction(p.prefix, p.builtin)" :disabled="providerMgmt.removing === p.prefix"
+                                class="px-3 py-1.5 rounded-xl text-[11px] font-medium transition-colors hover:bg-destructive/8 text-destructive/70 hover:text-destructive border border-destructive/15 hover:border-destructive/30 disabled:opacity-40">
+                          <span x-text="providerMgmt.removing === p.prefix ? 'Removing…' : 'Remove'"></span>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 </template>
@@ -1237,6 +1243,7 @@ function dashboard() {
       loading: false,
       adding: false,
       removing: null,
+      refreshing: null,
       showAddForm: false,
       newProvider: { name: '', prefix: '', base_url: '', api_format: 'openai', api_key: '' }
     },
@@ -1601,6 +1608,16 @@ function dashboard() {
         this.fetchStatus();
       } catch { this.toast('Network error', 'error'); }
       finally { this.providerMgmt.removing = null; }
+    },
+    async refreshProviderModels(prefix) {
+      this.providerMgmt.refreshing = prefix;
+      try {
+        const r = await fetch(`/api/providers/${encodeURIComponent(prefix)}/refresh-models`, { method: 'POST' });
+        const d = await r.json();
+        this.toast(d.success ? d.message : (d.message || 'Failed to refresh models'), d.success ? 'success' : 'error');
+        if (d.success) { this.fetchProviders(); this.models.loaded = false; }
+      } catch { this.toast('Network error', 'error'); }
+      finally { this.providerMgmt.refreshing = null; }
     },
 
     async resetKey(prefix) {

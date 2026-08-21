@@ -187,6 +187,13 @@ async def add_key_endpoint(payload: dict = Body(...), user: None = Depends(requi
 
     success, msg = add_api_key(key, key_type)
     if success:
+        # A key for a custom provider is useless without its model catalog --
+        # the "Add Provider" flow does this automatically, but a key added
+        # from this generic form (or a second/replacement key) needs it too.
+        if key_type in config_module.CUSTOM_PROVIDERS:
+            refreshed, refresh_msg = await config_module.refresh_custom_provider_models(key_type)
+            if refreshed:
+                msg = f"{msg} ({refresh_msg})"
         await sse_broadcaster.broadcast("status", await _build_status_dict())
     return {"success": success, "message": msg}
 

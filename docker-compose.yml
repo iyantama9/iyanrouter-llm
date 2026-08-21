@@ -45,6 +45,17 @@ services:
       - ./ssl:/app/ssl:ro  # Mount SSL certificates (read-only)
       - ./.env:/app/.env    # so /api/models/refresh writes persist on the host
 
+  copilot-api:
+    build: ../copilot-api
+    container_name: copilot-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4141:4141"  # loopback only -- no auth of its own once running
+    volumes:
+      - copilot_api_data:/root/.local/share/copilot-api  # persists the GitHub auth token
+
 volumes:
   postgres_data:
+    driver: local
+  copilot_api_data:
     driver: local
