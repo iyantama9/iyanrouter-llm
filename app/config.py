@@ -1,4 +1,5 @@
 import os
+import re
 import time
 import asyncio
 import hashlib
@@ -179,6 +180,27 @@ qc_model_key_index: dict[str, int] = {}
 # key_value -> {model_short: exhausted?}
 qc_model_failures: dict[str, dict[str, bool]] = {}
 
+BUILTIN_PROVIDER_PREFIXES = {"kc", "cv", "bm", "nry", "dahl", "qc", "marketku", "atomesus", "weize"}
+BUILTIN_PROVIDER_NAMES = {
+    "kc": "Kimchi", "cv": "Cavoti", "bm": "Bluesminds", "nry": "byNara",
+    "dahl": "Dahl", "qc": "Qwen Cloud", "marketku": "MarketKu",
+    "atomesus": "Atomesus", "weize": "Weize",
+}
+BUILTIN_PROVIDER_BASE_URLS = {
+    "kc": KIMCHI_BASE_URL, "cv": CAVOTI_BASE_URL, "bm": BLUESMINDS_BASE_URL,
+    "nry": NARA_BASE_URL, "dahl": DAHL_BASE_URL, "qc": QWEN_CLOUD_BASE_URL,
+    "marketku": MARKETKU_BASE_URL, "atomesus": ATOMESUS_BASE_URL, "weize": WEIZE_BASE_URL,
+}
+
+# prefix -> {"name": str, "base_url": str, "api_format": "openai"|"anthropic"}
+CUSTOM_PROVIDERS: dict[str, dict] = {}
+# prefix -> [key_value, ...]
+CUSTOM_PROVIDER_KEYS: dict[str, list] = {}
+# prefix -> current rotation index into CUSTOM_PROVIDER_KEYS[prefix]
+custom_key_index: dict[str, int] = {}
+# built-in provider prefixes the admin has removed (see disabled_providers table)
+DISABLED_PROVIDERS: set = set()
+
 
 def _bg(coro):
     try:
@@ -188,7 +210,7 @@ def _bg(coro):
 
 
 async def init_state_from_db():
-    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS, WEIZE_API_KEYS, key_statuses, total_requests, total_tokens, failover_count, current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index, current_atomesus_key_index, current_weize_key_index, START_TIME
+    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS, WEIZE_API_KEYS, key_statuses, total_requests, total_tokens, failover_count, current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index, current_atomesus_key_index, current_weize_key_index, START_TIME, CUSTOM_PROVIDERS, CUSTOM_PROVIDER_KEYS, DISABLED_PROVIDERS
 
     API_KEYS.clear()
     CV_API_KEYS.clear()
@@ -200,6 +222,20 @@ async def init_state_from_db():
     ATOMESUS_API_KEYS.clear()
     WEIZE_API_KEYS.clear()
     key_statuses.clear()
+
+    # Load custom (admin-added) providers and disabled built-ins first, so the
+    # key-loading loop below knows where to put keys for a custom provider
+    # instead of dumping unrecognized providers into the default kc bucket.
+    from app.database import get_custom_providers, get_disabled_providers
+    CUSTOM_PROVIDERS.clear()
+    CUSTOM_PROVIDER_KEYS.clear()
+    for row in await get_custom_providers():
+        CUSTOM_PROVIDERS[row["prefix"]] = {
+            "name": row["name"], "base_url": row["base_url"].rstrip("/"), "api_format": row["api_format"],
+            "models": [m.strip() for m in (row["models"] or "").split(",") if m.strip()],
+        }
+        CUSTOM_PROVIDER_KEYS[row["prefix"]] = []
+    DISABLED_PROVIDERS = await get_disabled_providers()
 
     # Load keys from DB
     rows = await db_fetch("SELECT key_value, key_prefix, status, provider FROM api_keys ORDER BY id")
@@ -227,6 +263,8 @@ async def init_state_from_db():
                 ATOMESUS_API_KEYS.append(val)
             elif provider == "weize":
                 WEIZE_API_KEYS.append(val)
+            elif provider in CUSTOM_PROVIDERS:
+                CUSTOM_PROVIDER_KEYS[provider].append(val)
             else:
                 API_KEYS.append(val)
             key_statuses[val] = r["status"]
@@ -503,7 +541,8 @@ async def init_state_from_db():
             key_statuses[key] = "Standby"
             await db_execute("UPDATE api_keys SET status = 'Standby' WHERE key_value = $1", key)
 
-    print(f"[INIT] Loaded {len(API_KEYS)} kc / {len(CV_API_KEYS)} cv / {len(BM_API_KEYS)} bm / {len(NR_API_KEYS)} nry / {len(DAHL_API_KEYS)} dahl / {len(QC_API_KEYS)} qc / {len(MARKETKU_API_KEYS)} marketku / {len(ATOMESUS_API_KEYS)} atomesus / {len(WEIZE_API_KEYS)} weize keys, {total_requests} total requests, {failover_count} failovers from DB")
+    custom_key_total = sum(len(v) for v in CUSTOM_PROVIDER_KEYS.values())
+    print(f"[INIT] Loaded {len(API_KEYS)} kc / {len(CV_API_KEYS)} cv / {len(BM_API_KEYS)} bm / {len(NR_API_KEYS)} nry / {len(DAHL_API_KEYS)} dahl / {len(QC_API_KEYS)} qc / {len(MARKETKU_API_KEYS)} marketku / {len(ATOMESUS_API_KEYS)} atomesus / {len(WEIZE_API_KEYS)} weize / {custom_key_total} custom ({len(CUSTOM_PROVIDERS)} providers) keys, {total_requests} total requests, {failover_count} failovers from DB, {len(DISABLED_PROVIDERS)} disabled providers")
 
 
 async def auto_reset_limited_keys():
@@ -772,6 +811,146 @@ def rotate_weize_key(reason: str = "Limited"):
     return new_key
 
 
+def get_current_custom_key(prefix: str):
+    keys = CUSTOM_PROVIDER_KEYS.get(prefix) or []
+    if not keys:
+        return ""
+    idx = custom_key_index.get(prefix, 0) % len(keys)
+    return keys[idx]
+
+
+def rotate_custom_key(prefix: str, reason: str = "Limited"):
+    global failover_count
+    keys = CUSTOM_PROVIDER_KEYS.get(prefix) or []
+    if len(keys) <= 1:
+        return get_current_custom_key(prefix)
+    idx = (custom_key_index.get(prefix, 0) + 1) % len(keys)
+    custom_key_index[prefix] = idx
+    new_key = keys[idx]
+    key_statuses[new_key] = "Active"
+    failover_count += 1
+    print(f"[LOG] Rotated {prefix} key → index {idx}: {new_key[:15]}... (reason: {reason})")
+    _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
+    _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
+    return new_key
+
+
+async def refresh_custom_provider_models(prefix: str):
+    """Fetch {base_url}/models with whatever key is currently active for this
+    provider and cache the id list. Called right after a provider (with a
+    key) is added, and can be re-run later to pick up catalog changes."""
+    import httpx
+    from app.database import update_custom_provider_models
+
+    info = CUSTOM_PROVIDERS.get(prefix)
+    if not info:
+        return False, "Unknown provider"
+    key = get_current_custom_key(prefix)
+    if not key:
+        return False, "No API key configured for this provider yet"
+
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            r = await client.get(f"{info['base_url']}/models", headers={"Authorization": f"Bearer {key}"})
+        if r.status_code != 200:
+            return False, f"HTTP {r.status_code} fetching model list"
+        data = r.json()
+        raw_ids = [m["id"] for m in data.get("data", []) if m.get("id")]
+    except Exception as e:
+        return False, f"{type(e).__name__}: {e}"
+
+    if not raw_ids:
+        return False, "Provider returned no models"
+
+    # Some providers self-namespace their ids (e.g. "mk/auto"); strip that so
+    # it isn't doubled up when we prefix it again for display/dispatch.
+    own_prefix = f"{prefix}/"
+    models = list(dict.fromkeys(m[len(own_prefix):] if m.startswith(own_prefix) else m for m in raw_ids))
+
+    info["models"] = models
+    await update_custom_provider_models(prefix, ",".join(models))
+    return True, f"Fetched {len(models)} models"
+
+
+async def add_custom_provider(prefix: str, name: str, base_url: str, api_format: str):
+    from app.database import insert_custom_provider, enable_provider as db_enable_provider
+    prefix = prefix.strip().lower()
+    name = name.strip()
+    base_url = base_url.strip().rstrip("/")
+    if not prefix or not name or not base_url:
+        return False, "Prefix, name, and base URL are all required"
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,19}", prefix):
+        return False, "Prefix must be lowercase letters/numbers/hyphens, 1-20 chars"
+    if prefix in BUILTIN_PROVIDER_PREFIXES or prefix in CUSTOM_PROVIDERS:
+        return False, f"Prefix '{prefix}' is already in use"
+    if api_format not in ("openai", "anthropic"):
+        return False, "api_format must be 'openai' or 'anthropic'"
+
+    await insert_custom_provider(prefix, name, base_url, api_format)
+    CUSTOM_PROVIDERS[prefix] = {"name": name, "base_url": base_url, "api_format": api_format, "models": []}
+    CUSTOM_PROVIDER_KEYS[prefix] = []
+    custom_key_index[prefix] = 0
+    # A brand new prefix can't collide with a disabled built-in, but clear
+    # defensively in case a provider was re-added under a reused prefix.
+    DISABLED_PROVIDERS.discard(prefix)
+    await db_enable_provider(prefix)
+    return True, "Provider added"
+
+
+def remove_custom_key(prefix: str, key: str):
+    keys = CUSTOM_PROVIDER_KEYS.get(prefix)
+    if not keys or key not in keys:
+        return False, "Key not found"
+    was_active = get_current_custom_key(prefix) == key
+    keys.remove(key)
+    custom_key_index[prefix] = custom_key_index.get(prefix, 0) % max(len(keys), 1)
+    key_statuses.pop(key, None)
+    if was_active and keys:
+        rotate_custom_key(prefix)
+    _bg(db_execute("DELETE FROM api_keys WHERE key_value = $1", key))
+    return True, "Key removed successfully"
+
+
+async def remove_provider(prefix: str):
+    """
+    Remove a provider entirely.
+
+    Built-ins keep their Python routing code (removing that needs a deploy),
+    so "removing" one means: wipe its keys and mark it disabled so dispatch
+    refuses it. Custom providers are dropped for real, including their keys.
+    """
+    from app.database import (
+        delete_custom_provider, disable_provider as db_disable_provider,
+    )
+
+    if prefix in BUILTIN_PROVIDER_PREFIXES:
+        provider_lists = {
+            "kc": API_KEYS, "cv": CV_API_KEYS, "bm": BM_API_KEYS, "nry": NR_API_KEYS,
+            "dahl": DAHL_API_KEYS, "qc": QC_API_KEYS, "marketku": MARKETKU_API_KEYS,
+            "atomesus": ATOMESUS_API_KEYS, "weize": WEIZE_API_KEYS,
+        }
+        keys = provider_lists[prefix]
+        for k in list(keys):
+            key_statuses.pop(k, None)
+        keys.clear()
+        await db_execute("DELETE FROM api_keys WHERE provider = $1", prefix)
+        await db_disable_provider(prefix)
+        DISABLED_PROVIDERS.add(prefix)
+        return True, "Built-in provider disabled and its keys removed"
+
+    if prefix not in CUSTOM_PROVIDERS:
+        return False, "Unknown provider"
+
+    for k in list(CUSTOM_PROVIDER_KEYS.get(prefix) or []):
+        key_statuses.pop(k, None)
+    await db_execute("DELETE FROM api_keys WHERE provider = $1", prefix)
+    await delete_custom_provider(prefix)
+    CUSTOM_PROVIDERS.pop(prefix, None)
+    CUSTOM_PROVIDER_KEYS.pop(prefix, None)
+    custom_key_index.pop(prefix, None)
+    return True, "Provider removed"
+
+
 def add_request_log(model, status_code, key_used, rotated, latency_ms, input_tokens: int = 0, output_tokens: int = 0):
     global total_requests, total_tokens
     total_requests += 1
@@ -809,7 +988,8 @@ def add_api_key(new_key: str, key_type: str = "auto"):
     new_key = new_key.strip()
     if not new_key:
         return False, "Key cannot be empty"
-    if new_key in API_KEYS or new_key in CV_API_KEYS or new_key in BM_API_KEYS or new_key in NR_API_KEYS or new_key in DAHL_API_KEYS or new_key in QC_API_KEYS or new_key in MARKETKU_API_KEYS or new_key in ATOMESUS_API_KEYS or new_key in WEIZE_API_KEYS:
+    all_custom_keys = [k for keys in CUSTOM_PROVIDER_KEYS.values() for k in keys]
+    if new_key in API_KEYS or new_key in CV_API_KEYS or new_key in BM_API_KEYS or new_key in NR_API_KEYS or new_key in DAHL_API_KEYS or new_key in QC_API_KEYS or new_key in MARKETKU_API_KEYS or new_key in ATOMESUS_API_KEYS or new_key in WEIZE_API_KEYS or new_key in all_custom_keys:
         return False, "Key already exists"
 
     if key_type == "cv":
@@ -836,10 +1016,16 @@ def add_api_key(new_key: str, key_type: str = "auto"):
     elif key_type == "weize":
         WEIZE_API_KEYS.append(new_key)
         provider = "weize"
+    elif key_type in CUSTOM_PROVIDERS:
+        CUSTOM_PROVIDER_KEYS.setdefault(key_type, []).append(new_key)
+        provider = key_type
+    elif key_type == "kc":
+        API_KEYS.append(new_key)
+        provider = "kc"
     else:
         API_KEYS.append(new_key)
         provider = "kc"
-        
+
     key_statuses[new_key] = "Standby"
     prefix = new_key[:15] + "..." if len(new_key) > 15 else new_key
     # Save to DB
@@ -847,6 +1033,13 @@ def add_api_key(new_key: str, key_type: str = "auto"):
         "INSERT INTO api_keys (key_value, key_prefix, status, provider) VALUES ($1, $2, 'Standby', $3)",
         new_key, prefix, provider
     ))
+    # Adding a key for a provider implicitly un-disables it -- a prior
+    # "remove provider" only makes sense as permanent if nobody ever
+    # provisions it again.
+    if provider in DISABLED_PROVIDERS:
+        DISABLED_PROVIDERS.discard(provider)
+        from app.database import enable_provider as db_enable_provider
+        _bg(db_enable_provider(provider))
     # Also keep .env synced as backup for castai keys
     if provider == "kc":
         _save_keys_to_env()
@@ -921,6 +1114,10 @@ def remove_api_key(key_prefix: str):
                 break
 
     if not target_key:
+        for cprefix, keys in CUSTOM_PROVIDER_KEYS.items():
+            for key in keys:
+                if key.startswith(key_prefix):
+                    return remove_custom_key(cprefix, key)
         return False, "Key not found"
 
     if len(target_list) <= 1:
@@ -1019,6 +1216,16 @@ def remove_api_key(key_prefix: str):
     return True, "Key removed successfully"
 
 
+def bulk_remove_api_keys(key_prefixes: list):
+    """Remove several keys by their masked prefix. Best-effort: keeps going
+    even if one entry fails (e.g. it's the last key of its provider)."""
+    removed, failed = [], []
+    for prefix in key_prefixes:
+        ok, msg = remove_api_key(prefix)
+        (removed if ok else failed).append({"prefix": prefix, "message": msg})
+    return removed, failed
+
+
 def reset_key_status(key_prefix: str):
     for key in API_KEYS + CV_API_KEYS + BM_API_KEYS + NR_API_KEYS + DAHL_API_KEYS + QC_API_KEYS + MARKETKU_API_KEYS + ATOMESUS_API_KEYS + WEIZE_API_KEYS:
         if key.startswith(key_prefix):
@@ -1091,14 +1298,22 @@ def set_active_key(key_prefix: str, provider: str = None):
 
 def get_masked_keys():
     result = []
-    for idx, key in enumerate(API_KEYS + CV_API_KEYS + BM_API_KEYS + NR_API_KEYS + DAHL_API_KEYS + QC_API_KEYS + MARKETKU_API_KEYS + ATOMESUS_API_KEYS + WEIZE_API_KEYS):
+    idx = 0
+    for key in API_KEYS + CV_API_KEYS + BM_API_KEYS + NR_API_KEYS + DAHL_API_KEYS + QC_API_KEYS + MARKETKU_API_KEYS + ATOMESUS_API_KEYS + WEIZE_API_KEYS:
         status = key_statuses.get(key, "Standby")
         masked = key[:15] + "..." if len(key) > 15 else key
+        _provider = (
+            "kc" if key in API_KEYS else "cv" if key in CV_API_KEYS else "bm" if key in BM_API_KEYS
+            else "nry" if key in NR_API_KEYS else "dahl" if key in DAHL_API_KEYS else "qc" if key in QC_API_KEYS
+            else "marketku" if key in MARKETKU_API_KEYS else "atomesus" if key in ATOMESUS_API_KEYS else "weize"
+        )
         result.append({
             "index": idx,
             "masked": masked,
             "prefix": key[:15],
             "status": status,
+            "provider": _provider,
+            "provider_name": BUILTIN_PROVIDER_NAMES.get(_provider, _provider),
             "is_kc": key in API_KEYS,
             "is_cv": key in CV_API_KEYS,
             "is_bm": key in BM_API_KEYS,
@@ -1109,6 +1324,24 @@ def get_masked_keys():
             "is_atomesus": key in ATOMESUS_API_KEYS,
             "is_weize": key in WEIZE_API_KEYS
         })
+        idx += 1
+    for prefix, keys in CUSTOM_PROVIDER_KEYS.items():
+        info = CUSTOM_PROVIDERS.get(prefix, {})
+        for key in keys:
+            status = key_statuses.get(key, "Standby")
+            masked = key[:15] + "..." if len(key) > 15 else key
+            result.append({
+                "index": idx,
+                "masked": masked,
+                "prefix": key[:15],
+                "status": status,
+                "provider": prefix,
+                "provider_name": info.get("name", prefix),
+                "is_kc": False, "is_cv": False, "is_bm": False, "is_nr": False, "is_dahl": False,
+                "is_qc": False, "is_marketku": False, "is_atomesus": False, "is_weize": False,
+                "is_custom": True,
+            })
+            idx += 1
     return result
 
 

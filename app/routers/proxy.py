@@ -123,6 +123,125 @@ async def _save_brain_exchange(
     )
 
 
+async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool):
+    """
+    Send an Anthropic-shaped request to an admin-added custom provider and
+    return an Anthropic-shaped result, regardless of whether that provider
+    speaks OpenAI or Anthropic upstream. Callers on the OpenAI-compatible
+    endpoint convert their request to this shape first and the response back
+    afterwards -- this function only ever deals in Anthropic shape.
+
+    Returns either:
+      ("json", status_code, dict)                          for non-streaming
+      ("stream", status_code, async_generator[str] | None)  for streaming
+    A None generator means the caller should fall back to the status/dict
+    error path instead (used when we fail before ever reaching upstream).
+    """
+    info = config_module.CUSTOM_PROVIDERS.get(prefix)
+    if not info:
+        return "json", 400, {"error": {"message": f"Unknown provider '{prefix}'"}}
+
+    keys = config_module.CUSTOM_PROVIDER_KEYS.get(prefix) or []
+    if not keys:
+        return "json", 500, {"error": {"message": f"No API keys configured for provider '{prefix}'"}}
+
+    base_url = info["base_url"]
+    api_format = info["api_format"]
+    msg_id = f"msg_{uuid.uuid4().hex[:24]}"
+    model = payload.get("model", "")
+
+    last_status, last_body = 502, {"error": {"message": "All configured keys for this provider failed."}}
+
+    for attempt in range(len(keys)):
+        key = config_module.get_current_custom_key(prefix)
+        headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+        try:
+            if api_format == "anthropic":
+                url = f"{base_url}/messages"
+                upstream_payload = dict(payload)
+
+                if not stream:
+                    async with httpx.AsyncClient(timeout=300) as client:
+                        resp = await client.post(url, headers=headers, json=upstream_payload)
+                    if resp.status_code == 200:
+                        return "json", 200, resp.json()
+                    try:
+                        body = resp.json()
+                    except Exception:
+                        body = {"error": {"message": resp.text}}
+                    last_status, last_body = resp.status_code, body
+                else:
+                    client = httpx.AsyncClient(timeout=300)
+                    req = client.build_request("POST", url, headers=headers, json=upstream_payload)
+                    resp = await client.send(req, stream=True)
+                    if resp.status_code == 200:
+                        async def _relay():
+                            try:
+                                async for chunk in resp.aiter_bytes():
+                                    yield chunk
+                            finally:
+                                await resp.aclose()
+                                await client.aclose()
+                        return "stream", 200, _relay()
+                    body_bytes = await resp.aread()
+                    await resp.aclose()
+                    await client.aclose()
+                    try:
+                        last_body = json.loads(body_bytes)
+                    except Exception:
+                        last_body = {"error": {"message": body_bytes.decode(errors="replace")}}
+                    last_status = resp.status_code
+
+            else:  # openai-compatible upstream
+                url = f"{base_url}/chat/completions"
+                upstream_payload = build_openai_request(payload, provider=prefix)
+                upstream_payload["stream"] = stream
+
+                if not stream:
+                    async with httpx.AsyncClient(timeout=300) as client:
+                        resp = await client.post(url, headers=headers, json=upstream_payload)
+                    if resp.status_code == 200:
+                        anthropic_resp = to_anthropic_response(resp.json(), model, msg_id)
+                        return "json", 200, anthropic_resp
+                    try:
+                        body = resp.json()
+                    except Exception:
+                        body = {"error": {"message": resp.text}}
+                    last_status, last_body = resp.status_code, body
+                else:
+                    client = httpx.AsyncClient(timeout=300)
+                    req = client.build_request("POST", url, headers=headers, json=upstream_payload)
+                    resp = await client.send(req, stream=True)
+                    if resp.status_code == 200:
+                        async def _relay():
+                            try:
+                                async for chunk in stream_as_anthropic(resp, model, msg_id):
+                                    yield chunk
+                            finally:
+                                await resp.aclose()
+                                await client.aclose()
+                        return "stream", 200, _relay()
+                    body_bytes = await resp.aread()
+                    await resp.aclose()
+                    await client.aclose()
+                    try:
+                        last_body = json.loads(body_bytes)
+                    except Exception:
+                        last_body = {"error": {"message": body_bytes.decode(errors="replace")}}
+                    last_status = resp.status_code
+
+        except Exception as e:
+            last_status, last_body = 502, {"error": {"message": f"{type(e).__name__}: {e}"}}
+
+        if attempt < len(keys) - 1:
+            config_module.rotate_custom_key(prefix)
+        else:
+            break
+
+    return "json", last_status, last_body
+
+
 def _qwen_image_request(payload: dict) -> dict:
     prompt = ""
     image_urls = []
@@ -228,6 +347,9 @@ async def list_models(request: Request):
         models.append(f"at/{m}")
     for m in config_module.WEIZE_MODELS:
         models.append(f"wz/{m}")
+    for prefix, info in config_module.CUSTOM_PROVIDERS.items():
+        for m in info.get("models") or []:
+            models.append(f"{prefix}/{m}")
 
     data = []
     for m in models:
@@ -253,6 +375,25 @@ async def messages(request: Request):
         return JSONResponse(status_code=401, content={"error": {"message": "Invalid router password."}})
 
     payload = await request.json()
+
+    # Custom (admin-added) providers get a self-contained dispatch path,
+    # short-circuiting before any of the built-in routing/brain logic below.
+    requested_model_raw = payload.get("model", "") or ""
+    for cprefix in config_module.CUSTOM_PROVIDERS:
+        if requested_model_raw.startswith(f"{cprefix}/"):
+            payload["model"] = requested_model_raw[len(cprefix) + 1:]
+            want_stream = bool(payload.get("stream"))
+            start_req_time = time.time()
+            kind, status, body = await _dispatch_custom_provider(cprefix, payload, want_stream)
+            log_model = f"{cprefix}/{payload['model']}"
+            if kind == "stream":
+                async def _wrapped():
+                    async for chunk in body:
+                        yield chunk
+                add_request_log(log_model, status, "custom", False, int((time.time() - start_req_time) * 1000))
+                return StreamingResponse(_wrapped(), media_type="text/event-stream")
+            add_request_log(log_model, status, "custom", False, int((time.time() - start_req_time) * 1000))
+            return JSONResponse(status_code=status, content=body)
 
     # Brain: Always enabled for all users
     enable_brain = True
@@ -300,6 +441,9 @@ async def messages(request: Request):
             provider = "weize"
         elif payload["model"].startswith("kc/") or payload["model"] in config_module.KIMCHI_MODELS:
             provider = "kc"
+
+    if provider in config_module.DISABLED_PROVIDERS:
+        return JSONResponse(status_code=503, content={"error": {"message": f"Provider '{provider}' has been removed."}})
 
     for prefix in ("kc/", "cv/", "bm/", "nry/", "dh/", "qc/", "mk/", "at/", "wz/"):
         if payload.get("model", "").startswith(prefix):
@@ -1120,6 +1264,61 @@ async def chat_completions(request: Request):
     payload = dict(openai_payload)
     requested_model = payload.get("model") or "cv/gpt-5.4-mini"
     print(f"[CHAT-COMPLETIONS] Model: {requested_model}, stream: {payload.get('stream')}", flush=True)
+
+    for cprefix in config_module.CUSTOM_PROVIDERS:
+        if requested_model.startswith(f"{cprefix}/"):
+            model_name = requested_model[len(cprefix) + 1:]
+            system_prompt, anthropic_messages = openai_to_anthropic_messages(payload.get("messages") or [])
+            anthropic_payload = {
+                "model": model_name,
+                "messages": anthropic_messages,
+                "max_tokens": payload.get("max_tokens", 4096),
+            }
+            if system_prompt:
+                anthropic_payload["system"] = system_prompt
+            want_stream = bool(payload.get("stream"))
+            start_req_time = time.time()
+            kind, status, body = await _dispatch_custom_provider(cprefix, anthropic_payload, want_stream)
+            log_model = f"{cprefix}/{model_name}"
+            add_request_log(log_model, status, "custom", False, int((time.time() - start_req_time) * 1000))
+
+            if status != 200:
+                return JSONResponse(status_code=status, content=body)
+            if kind == "json":
+                return JSONResponse(content=anthropic_to_openai_response(body, requested_model))
+
+            async def _relay_openai_stream():
+                # `body` yields either whole SSE-event strings (upstream was
+                # openai-format, already reassembled by stream_as_anthropic)
+                # or raw, possibly-partial byte chunks (upstream was
+                # anthropic-format, relayed as-is) -- buffer defensively so
+                # a line split across two chunks doesn't get silently dropped.
+                idx = 0
+                buffer = ""
+                async for chunk in body:
+                    text = chunk if isinstance(chunk, str) else chunk.decode(errors="ignore")
+                    buffer += text
+                    lines = buffer.split("\n")
+                    buffer = lines.pop()
+                    for line in lines:
+                        line = line.strip()
+                        if not line.startswith("data: "):
+                            continue
+                        data_str = line[6:].strip()
+                        if data_str in ("[DONE]", ""):
+                            continue
+                        try:
+                            chunk_data = json.loads(data_str)
+                        except Exception:
+                            continue
+                        out = anthropic_to_openai_stream_chunk(chunk_data, requested_model, idx)
+                        idx += 1
+                        if out:
+                            yield out.encode()
+                yield b"data: [DONE]\n\n"
+
+            return StreamingResponse(_relay_openai_stream(), media_type="text/event-stream")
+
     provider = "cv"
 
     if requested_model.startswith("cv/") or requested_model in config_module.CAVOTI_MODELS:
@@ -1140,6 +1339,9 @@ async def chat_completions(request: Request):
         provider = "weize"
     elif requested_model.startswith("kc/") or requested_model in config_module.KIMCHI_MODELS:
         provider = "kc"
+
+    if provider in config_module.DISABLED_PROVIDERS:
+        return JSONResponse(status_code=503, content={"error": {"message": f"Provider '{provider}' has been removed."}})
 
     provider_prefixes = {
         "kc": "kc/",

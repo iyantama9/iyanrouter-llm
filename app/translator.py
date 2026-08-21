@@ -166,7 +166,10 @@ def normalize_for_qwen(messages):
 def build_openai_request(body, provider="kc", session_history=None):
     claude_model = body.get("model", "")
 
-    if provider in ("bm", "cv", "dahl", "nry", "qc", "marketku", "atomesus", "weize"):
+    if provider != "kc":
+        # Only the default/legacy "kc" provider gets sonnet/haiku/opus name
+        # mapping. Every other provider -- built-in or a custom one added
+        # later -- passes the requested model straight through.
         openai_model = claude_model
     else:
         fallback = config.KIMCHI_MODELS[-1] if config.KIMCHI_MODELS else ""

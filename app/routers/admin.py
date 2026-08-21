@@ -7,12 +7,15 @@ from fastapi.responses import JSONResponse, HTMLResponse, RedirectResponse, Stre
 from fastapi.templating import Jinja2Templates
 import httpx
 
+import asyncio
+
 import app.config as config_module
 from app.config import (
     KIMCHI_BASE_URL, CAVOTI_BASE_URL, BLUESMINDS_BASE_URL, NARA_BASE_URL, DAHL_BASE_URL,
     QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL, ATOMESUS_BASE_URL, WEIZE_BASE_URL, ROUTER_PASSWORD,
     recent_requests,
-    add_api_key, remove_api_key, reset_key_status, get_masked_keys, set_active_key,
+    add_api_key, remove_api_key, bulk_remove_api_keys, reset_key_status, get_masked_keys, set_active_key,
+    add_custom_provider, remove_provider,
     SESSION_SECRET, ADMIN_USERNAME, verify_admin_password, get_paginated_logs,
 )
 from app.sse import sse_broadcaster
@@ -134,52 +137,53 @@ async def api_logs(
     return await get_paginated_logs(page, per_page, search, sort_by, sort_order)
 
 
+async def _probe_provider(client: httpx.AsyncClient, prefix: str, base_url: str, key: str) -> str | None:
+    """GET {base_url}/models with this key. Returns prefix on a 200, else None."""
+    try:
+        r = await client.get(f"{base_url}/models", headers={"Authorization": f"Bearer {key}"}, timeout=6.0)
+        return prefix if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+async def detect_provider_for_key(key: str) -> list[str]:
+    """
+    Test a key against every configured provider (built-in + custom) at once
+    and return every prefix that accepted it. Real network probes, not a
+    guess from the key's shape -- provider key formats overlap too much
+    (most are just "sk-...") for pattern matching to be reliable.
+    """
+    candidates = dict(config_module.BUILTIN_PROVIDER_BASE_URLS)
+    candidates.update({p: info["base_url"] for p, info in config_module.CUSTOM_PROVIDERS.items()})
+    async with httpx.AsyncClient() as client:
+        results = await asyncio.gather(*[
+            _probe_provider(client, prefix, base_url, key) for prefix, base_url in candidates.items()
+        ])
+    return [r for r in results if r]
+
+
+@router.post("/api/keys/detect")
+async def api_detect_key(payload: dict = Body(...), user: None = Depends(require_auth)):
+    key = payload.get("key", "").strip()
+    if not key:
+        return JSONResponse(status_code=400, content={"error": "key is required"})
+    matches = await detect_provider_for_key(key)
+    return {"matches": matches}
+
+
 @router.post("/api/keys")
 async def add_key_endpoint(payload: dict = Body(...), user: None = Depends(require_auth)):
     key = payload.get("key", "").strip()
     key_type = payload.get("type", "auto")
 
-    if key_type == "auto" and key.startswith("sk-nry-"):
-        key_type = "nry"
-    elif key_type == "auto" and key.startswith("dahl_"):
-        key_type = "dahl"
-    elif key_type == "auto" and key.startswith("wzr_"):
-        key_type = "weize"
-    elif key_type == "auto" and key.startswith("sk-"):
-        async with httpx.AsyncClient() as client:
-            try:
-                r = await client.get(f"{CAVOTI_BASE_URL}/models", headers={"Authorization": f"Bearer {key}"}, timeout=3.0)
-                if r.status_code == 200:
-                    key_type = "cv"
-            except Exception:
-                pass
-
-            if key_type == "auto":
-                try:
-                    r = await client.get(f"{BLUESMINDS_BASE_URL}/models", headers={"Authorization": f"Bearer {key}"}, timeout=3.0)
-                    if r.status_code == 200:
-                        key_type = "bm"
-                except Exception:
-                    pass
-
-            if key_type == "auto":
-                try:
-                    r = await client.get(f"{DAHL_BASE_URL}/models", headers={"Authorization": f"Bearer {key}"}, timeout=3.0)
-                    if r.status_code == 200:
-                        key_type = "dahl"
-                except Exception:
-                    pass
-
-            if key_type == "auto":
-                try:
-                    r = await client.get(f"{QWEN_CLOUD_BASE_URL}/models", headers={"Authorization": f"Bearer {key}"}, timeout=3.0)
-                    if r.status_code == 200:
-                        key_type = "qc"
-                except Exception:
-                    pass
-
-    if key_type == "auto" and key.startswith("atms_"):
-        key_type = "atomesus"
+    if key_type == "auto":
+        matches = await detect_provider_for_key(key)
+        if len(matches) == 1:
+            key_type = matches[0]
+        elif len(matches) > 1:
+            return {"success": False, "message": f"Key matched multiple providers ({', '.join(matches)}) -- pick one explicitly.", "matches": matches}
+        else:
+            return {"success": False, "message": "Couldn't detect a provider for this key -- pick one explicitly.", "matches": []}
 
     success, msg = add_api_key(key, key_type)
     if success:
@@ -191,6 +195,92 @@ async def add_key_endpoint(payload: dict = Body(...), user: None = Depends(requi
 async def remove_key_endpoint(payload: dict = Body(...), user: None = Depends(require_auth)):
     prefix = payload.get("key_prefix", "")
     success, msg = remove_api_key(prefix)
+    if success:
+        await sse_broadcaster.broadcast("status", await _build_status_dict())
+    return {"success": success, "message": msg}
+
+
+@router.post("/api/keys/bulk-delete")
+async def bulk_delete_keys_endpoint(payload: dict = Body(...), user: None = Depends(require_auth)):
+    prefixes = payload.get("key_prefixes") or []
+    if not isinstance(prefixes, list) or not prefixes:
+        return JSONResponse(status_code=400, content={"error": "key_prefixes must be a non-empty list"})
+    removed, failed = bulk_remove_api_keys(prefixes)
+    if removed:
+        await sse_broadcaster.broadcast("status", await _build_status_dict())
+    return {"removed": removed, "failed": failed, "removed_count": len(removed), "failed_count": len(failed)}
+
+
+@router.get("/api/providers")
+async def list_providers_endpoint(user: None = Depends(require_auth)):
+    keys = get_masked_keys()
+    key_counts: dict[str, int] = {}
+    for k in keys:
+        key_counts[k["provider"]] = key_counts.get(k["provider"], 0) + 1
+
+    builtins = [
+        {
+            "prefix": prefix,
+            "name": config_module.BUILTIN_PROVIDER_NAMES[prefix],
+            "base_url": config_module.BUILTIN_PROVIDER_BASE_URLS[prefix],
+            "api_format": "openai",
+            "builtin": True,
+            "disabled": prefix in config_module.DISABLED_PROVIDERS,
+            "key_count": key_counts.get(prefix, 0),
+        }
+        for prefix in sorted(config_module.BUILTIN_PROVIDER_PREFIXES)
+    ]
+    customs = [
+        {
+            "prefix": prefix,
+            "name": info["name"],
+            "base_url": info["base_url"],
+            "api_format": info["api_format"],
+            "builtin": False,
+            "disabled": False,
+            "key_count": key_counts.get(prefix, 0),
+            "model_count": len(info.get("models") or []),
+        }
+        for prefix, info in config_module.CUSTOM_PROVIDERS.items()
+    ]
+    return {"providers": builtins + customs}
+
+
+@router.post("/api/providers")
+async def add_provider_endpoint(payload: dict = Body(...), user: None = Depends(require_auth)):
+    prefix = payload.get("prefix", "")
+    name = payload.get("name", "")
+    base_url = payload.get("base_url", "")
+    api_format = payload.get("api_format", "openai")
+    api_key = (payload.get("api_key") or "").strip()
+
+    success, msg = await add_custom_provider(prefix, name, base_url, api_format)
+    if not success:
+        return {"success": False, "message": msg}
+
+    prefix = prefix.strip().lower()
+    models_msg = None
+    if api_key:
+        key_ok, key_msg = add_api_key(api_key, prefix)
+        if key_ok:
+            refreshed, refresh_msg = await config_module.refresh_custom_provider_models(prefix)
+            models_msg = refresh_msg if refreshed else f"Provider added, but couldn't fetch its models: {refresh_msg}"
+        else:
+            models_msg = f"Provider added, but the key failed: {key_msg}"
+
+    await sse_broadcaster.broadcast("status", await _build_status_dict())
+    return {"success": True, "message": models_msg or msg}
+
+
+@router.post("/api/providers/{prefix}/refresh-models")
+async def refresh_provider_models_endpoint(prefix: str, user: None = Depends(require_auth)):
+    success, msg = await config_module.refresh_custom_provider_models(prefix)
+    return {"success": success, "message": msg}
+
+
+@router.delete("/api/providers/{prefix}")
+async def remove_provider_endpoint(prefix: str, user: None = Depends(require_auth)):
+    success, msg = await remove_provider(prefix)
     if success:
         await sse_broadcaster.broadcast("status", await _build_status_dict())
     return {"success": success, "message": msg}
@@ -217,7 +307,7 @@ async def api_set_active_key(payload: dict = Body(...), user: None = Depends(req
 
 @router.get("/api/models")
 async def api_get_models(user: None = Depends(require_auth)):
-    return {
+    result = {
         "kimchi": [f"kc/{m}" for m in config_module.KIMCHI_MODELS],
         "cavoti": [f"cv/{m}" for m in config_module.CAVOTI_MODELS],
         "bluesminds": [f"bm/{m}" for m in config_module.BLUESMINDS_MODELS],
@@ -228,6 +318,11 @@ async def api_get_models(user: None = Depends(require_auth)):
         "atomesus": [f"at/{m}" for m in config_module.ATOMESUS_MODELS],
         "weize": config_module.WEIZE_MODELS,
     }
+    # Custom providers are keyed by their own prefix so the Playground picker
+    # can group and label them without any hardcoded knowledge of them.
+    for prefix, info in config_module.CUSTOM_PROVIDERS.items():
+        result[prefix] = [f"{prefix}/{m}" for m in info.get("models") or []]
+    return result
 
 
 @router.post("/api/models/refresh")

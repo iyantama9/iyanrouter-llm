@@ -285,6 +285,33 @@ async def setup_tables():
         ON router_api_keys(key_value) WHERE is_active = TRUE
     """)
 
+    # ── Custom (admin-added) providers ──
+    await execute("""
+        CREATE TABLE IF NOT EXISTS custom_providers (
+            id SERIAL PRIMARY KEY,
+            prefix VARCHAR(20) UNIQUE NOT NULL,
+            name VARCHAR(100) NOT NULL,
+            base_url TEXT NOT NULL,
+            api_format VARCHAR(20) NOT NULL DEFAULT 'openai',
+            models TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+    """)
+    await execute("""
+        ALTER TABLE custom_providers ADD COLUMN IF NOT EXISTS models TEXT NOT NULL DEFAULT ''
+    """)
+
+    # Built-in providers the admin has chosen to remove. Routing checks this
+    # before dispatching; the provider's Python code path stays in place
+    # (removing it would require a deploy), it's just gated off. Re-adding a
+    # key for the provider clears the disable.
+    await execute("""
+        CREATE TABLE IF NOT EXISTS disabled_providers (
+            prefix VARCHAR(20) PRIMARY KEY,
+            disabled_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        )
+    """)
+
 
 # ── Chat Session Helpers ──
 # These back the Playground UI only. Real router traffic sessions (created by
@@ -406,3 +433,33 @@ async def verify_router_api_key(key_value: str):
 async def delete_router_api_key(key_id: int):
     """Delete a router API key."""
     await execute("DELETE FROM router_api_keys WHERE id = $1", key_id)
+
+
+# ── Custom providers ──
+async def get_custom_providers():
+    return await fetch("SELECT * FROM custom_providers ORDER BY created_at ASC")
+
+async def insert_custom_provider(prefix: str, name: str, base_url: str, api_format: str):
+    return await fetchrow(
+        "INSERT INTO custom_providers (prefix, name, base_url, api_format) VALUES ($1, $2, $3, $4) RETURNING *",
+        prefix, name, base_url, api_format
+    )
+
+async def update_custom_provider_models(prefix: str, models_csv: str):
+    await execute("UPDATE custom_providers SET models = $1 WHERE prefix = $2", models_csv, prefix)
+
+async def delete_custom_provider(prefix: str):
+    await execute("DELETE FROM custom_providers WHERE prefix = $1", prefix)
+
+async def get_disabled_providers():
+    rows = await fetch("SELECT prefix FROM disabled_providers")
+    return {r["prefix"] for r in rows}
+
+async def disable_provider(prefix: str):
+    await execute(
+        "INSERT INTO disabled_providers (prefix) VALUES ($1) ON CONFLICT (prefix) DO NOTHING",
+        prefix
+    )
+
+async def enable_provider(prefix: str):
+    await execute("DELETE FROM disabled_providers WHERE prefix = $1", prefix)

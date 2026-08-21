@@ -352,6 +352,59 @@
           </div>
         </div>
 
+        <!-- ===== Providers ===== -->
+        <div class="flex items-center justify-between pt-4">
+          <div class="flex items-center gap-2">
+            <span class="text-[9px] font-600 text-muted-foreground/70 uppercase tracking-[0.14em] font-mono">Providers</span>
+            <span class="text-[9px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-full border border-border font-mono"
+                  x-text="`${providerMgmt.providers.length} providers`">—</span>
+          </div>
+          <button @click="providerMgmt.showAddForm = true"
+                  class="text-xs text-primary hover:opacity-80 transition-opacity flex items-center gap-1.5">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Provider
+          </button>
+        </div>
+
+        <!-- Providers list -->
+        <div class="bg-card border border-border rounded-2xl overflow-hidden">
+          <div class="overflow-x-auto">
+            <table class="w-full text-sm">
+              <thead>
+                <tr class="border-b border-border">
+                  <th class="text-left px-4 py-3 text-[9px] font-600 text-muted-foreground/60 uppercase tracking-[0.14em] font-mono">Provider</th>
+                  <th class="text-left px-4 py-3 text-[9px] font-600 text-muted-foreground/60 uppercase tracking-[0.14em] font-mono">Base URL</th>
+                  <th class="text-left px-4 py-3 text-[9px] font-600 text-muted-foreground/60 uppercase tracking-[0.14em] font-mono">Format</th>
+                  <th class="text-left px-4 py-3 text-[9px] font-600 text-muted-foreground/60 uppercase tracking-[0.14em] font-mono">Keys</th>
+                  <th class="text-right px-4 py-3 text-[9px] font-600 text-muted-foreground/60 uppercase tracking-[0.14em] font-mono">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <template x-for="p in providerMgmt.providers" :key="p.prefix">
+                  <tr class="border-b border-border/40 hover:bg-secondary/15 transition-colors">
+                    <td class="px-4 py-3">
+                      <div class="flex items-center gap-2">
+                        <span class="font-medium" x-text="p.name"></span>
+                        <span class="font-mono text-[10px] text-muted-foreground/60" x-text="p.prefix + '/'"></span>
+                        <span x-show="p.disabled" class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-destructive/8 text-destructive border border-destructive/20">Disabled</span>
+                      </div>
+                    </td>
+                    <td class="px-4 py-3 font-mono text-[11px] text-muted-foreground truncate max-w-[220px]" x-text="p.base_url"></td>
+                    <td class="px-4 py-3 text-xs text-muted-foreground" x-text="p.api_format"></td>
+                    <td class="px-4 py-3 text-xs text-muted-foreground" x-text="p.key_count"></td>
+                    <td class="px-4 py-3 text-right">
+                      <button @click="removeProviderAction(p.prefix, p.builtin)" :disabled="providerMgmt.removing === p.prefix"
+                              class="px-3 py-1.5 rounded-xl text-[11px] font-medium transition-colors hover:bg-destructive/8 text-destructive/70 hover:text-destructive border border-destructive/15 hover:border-destructive/30 disabled:opacity-40">
+                        <span x-text="providerMgmt.removing === p.prefix ? 'Removing…' : 'Remove'"></span>
+                      </button>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ===== Provider API Keys ===== -->
         <div class="flex items-center gap-2 pt-4">
           <span class="text-[9px] font-600 text-muted-foreground/70 uppercase tracking-[0.14em] font-mono">Provider API Keys</span>
           <span class="text-[9px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-full border border-border font-mono"
@@ -362,15 +415,25 @@
         <div class="p-5 bg-card border border-border rounded-2xl">
           <p class="text-[9px] font-600 text-muted-foreground/60 uppercase tracking-[0.14em] font-mono mb-4">Add Provider Key</p>
           <form @submit.prevent="addKey" class="flex gap-2">
-            <select x-model="newKeyType"
-                    class="bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 text-muted-foreground transition-all rounded-xl shrink-0">
-              <option value="auto">Auto-Detect</option>
-              <option value="cv">Cavoti</option>
-              <option value="bm">Bluesminds</option>
-              <option value="nry">byNara</option>
-              <option value="dahl">Dahl</option>
-              <option value="qc">Qwen Cloud</option>
-            </select>
+            <div class="relative w-44 shrink-0" x-data="{ open: false }" @click.outside="open = false">
+              <button type="button" @click="open = !open"
+                      class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground flex items-center justify-between gap-2">
+                <span class="truncate" x-text="newKeyType === 'auto' ? 'Auto-Detect' : (providerMgmt.providers.find(p => p.prefix === newKeyType)?.name || newKeyType)"></span>
+                <i data-lucide="chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform duration-150" :class="open ? 'rotate-180' : ''"></i>
+              </button>
+              <div x-show="open" x-transition.opacity.duration.100ms
+                   class="absolute z-30 mt-1.5 w-56 max-h-64 overflow-y-auto bg-card border border-border rounded-xl shadow-xl">
+                <button type="button" @click="newKeyType = 'auto'; open = false"
+                        class="w-full text-left px-3 py-2 text-sm font-mono transition-colors"
+                        :class="newKeyType === 'auto' ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-secondary'">Auto-Detect</button>
+                <template x-for="p in providerMgmt.providers" :key="'opt-'+p.prefix">
+                  <button type="button" @click="newKeyType = p.prefix; open = false"
+                          class="w-full text-left px-3 py-2 text-sm font-mono transition-colors"
+                          :class="newKeyType === p.prefix ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-secondary'"
+                          x-text="p.name"></button>
+                </template>
+              </div>
+            </div>
             <input x-model="newKey" type="text" placeholder="Paste API key"
                    class="flex-1 bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 focus:border-primary/40 transition-all placeholder:font-sans placeholder:text-muted-foreground/40"
                    :disabled="addingKey">
@@ -378,9 +441,22 @@
                     class="bg-primary text-primary-foreground font-600 px-4 py-2 rounded-xl text-sm hover:opacity-90 active:opacity-80 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed flex items-center gap-2 whitespace-nowrap">
               <i data-lucide="plus" class="w-4 h-4" x-show="!addingKey"></i>
               <i data-lucide="loader-2" class="w-4 h-4 animate-spin" x-show="addingKey"></i>
-              <span x-text="addingKey ? 'Adding…' : 'Add'"></span>
+              <span x-text="addingKey ? (newKeyType === 'auto' ? 'Detecting…' : 'Adding…') : 'Add'"></span>
             </button>
           </form>
+        </div>
+
+        <!-- Bulk actions bar -->
+        <div x-show="selectedKeys.length" class="flex items-center justify-between px-4 py-2.5 bg-primary/8 border border-primary/20 rounded-xl">
+          <span class="text-xs text-primary font-medium" x-text="`${selectedKeys.length} key(s) selected`"></span>
+          <div class="flex items-center gap-3">
+            <button @click="selectedKeys = []" class="text-xs text-muted-foreground hover:text-foreground transition-colors">Clear</button>
+            <button @click="bulkDeleteSelectedKeys" :disabled="bulkDeleting"
+                    class="text-xs font-medium text-destructive hover:opacity-80 transition-opacity disabled:opacity-40 flex items-center gap-1.5">
+              <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+              <span x-text="bulkDeleting ? 'Removing…' : 'Delete Selected'"></span>
+            </button>
+          </div>
         </div>
 
         <!-- Keys table -->
@@ -389,6 +465,10 @@
             <table class="w-full text-sm">
               <thead>
                 <tr class="border-b border-border">
+                  <th class="px-4 py-3 w-8">
+                    <input type="checkbox" :checked="allKeysSelected()" @change="toggleAllKeys()"
+                           class="rounded border-border accent-primary" x-show="keys.length">
+                  </th>
                   <th class="text-left px-4 py-3 text-[9px] font-600 text-muted-foreground/60 uppercase tracking-[0.14em] font-mono">Masked Key</th>
                   <th class="text-left px-4 py-3 text-[9px] font-600 text-muted-foreground/60 uppercase tracking-[0.14em] font-mono">Status</th>
                   <th class="text-right px-4 py-3 text-[9px] font-600 text-muted-foreground/60 uppercase tracking-[0.14em] font-mono">Actions</th>
@@ -397,7 +477,7 @@
               <tbody>
                 <template x-if="!keys.length">
                   <tr>
-                    <td colspan="3" class="px-4 py-14 text-center">
+                    <td colspan="4" class="px-4 py-14 text-center">
                       <div class="flex flex-col items-center gap-3 text-muted-foreground">
                         <i data-lucide="key-round" class="w-8 h-8 opacity-20"></i>
                         <p class="text-sm font-medium">No keys configured</p>
@@ -409,19 +489,15 @@
                 <template x-for="k in keys" :key="k.prefix">
                   <tr class="border-b border-border/40 hover:bg-secondary/15 transition-colors">
                     <td class="px-4 py-3">
+                      <input type="checkbox" :checked="selectedKeys.includes(k.prefix)" @change="toggleKeySelect(k.prefix)"
+                             class="rounded border-border accent-primary">
+                    </td>
+                    <td class="px-4 py-3">
                       <div class="flex items-center gap-2.5">
                         <i data-lucide="key" class="w-3.5 h-3.5 text-muted-foreground/40 shrink-0"></i>
                         <span class="font-mono text-[11px] text-muted-foreground" x-text="k.masked"></span>
-                        <!-- Provider badge -->
-                        <span x-show="k.is_kc"  class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-orange-500/10 text-orange-400 border border-orange-500/20">Kimchi</span>
-                        <span x-show="k.is_cv"  class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-sky-500/10 text-sky-400 border border-sky-500/20">Cavoti</span>
-                        <span x-show="k.is_bm"  class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-violet-500/10 text-violet-400 border border-violet-500/20">Bluesminds</span>
-                        <span x-show="k.is_nr"  class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">byNara</span>
-                        <span x-show="k.is_dahl" class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-rose-500/10 text-rose-400 border border-rose-500/20">Dahl</span>
-                        <span x-show="k.is_qc" class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-purple-500/10 text-purple-400 border border-purple-500/20">Qwen Cloud</span>
-                        <span x-show="k.is_marketku" class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-green-500/10 text-green-400 border border-green-500/20">MarketKu</span>
-                        <span x-show="k.is_atomesus" class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">Atomesus</span>
-                        <span x-show="k.is_weize" class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/20">Weize</span>
+                        <span class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-secondary text-foreground/70 border border-border"
+                              x-text="k.provider_name"></span>
                       </div>
                     </td>
                     <td class="px-4 py-3">
@@ -1059,6 +1135,72 @@
     </div>
   </div>
 
+  <!-- Add Provider Modal -->
+  <div x-show="providerMgmt.showAddForm" x-transition.opacity
+       class="fixed inset-0 z-[90] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+       @keydown.escape.window="providerMgmt.showAddForm = false">
+    <div class="absolute inset-0" @click="providerMgmt.showAddForm = false"></div>
+    <div class="relative w-full max-w-md bg-card border border-border rounded-2xl shadow-2xl overflow-hidden">
+      <div class="px-5 py-4 border-b border-border flex items-center justify-between gap-4">
+        <h3 class="font-display text-lg font-700 tracking-wide text-foreground">Add Provider</h3>
+        <button @click="providerMgmt.showAddForm = false"
+                class="p-2 rounded-xl text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <form @submit.prevent="addProvider" class="p-5 space-y-3.5">
+        <div class="space-y-1.5">
+          <label class="text-[10px] font-600 text-muted-foreground/70 uppercase tracking-[0.1em] font-mono">Display Name</label>
+          <input x-model="providerMgmt.newProvider.name" type="text" placeholder="e.g. GetCore"
+                 class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40">
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-[10px] font-600 text-muted-foreground/70 uppercase tracking-[0.1em] font-mono">Prefix</label>
+          <input x-model="providerMgmt.newProvider.prefix" type="text" placeholder="e.g. gc (used as gc/model-name)"
+                 class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40">
+        </div>
+        <div class="space-y-1.5">
+          <label class="text-[10px] font-600 text-muted-foreground/70 uppercase tracking-[0.1em] font-mono">Base URL</label>
+          <input x-model="providerMgmt.newProvider.base_url" type="text" placeholder="https://example.com/v1"
+                 class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40">
+        </div>
+
+        <div class="space-y-1.5">
+          <label class="text-[10px] font-600 text-muted-foreground/70 uppercase tracking-[0.1em] font-mono">Format</label>
+          <div class="relative" x-data="{ open: false }" @click.outside="open = false">
+            <button type="button" @click="open = !open"
+                    class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 flex items-center justify-between gap-2 text-foreground">
+              <span x-text="providerMgmt.newProvider.api_format === 'openai' ? 'OpenAI-compatible' : 'Anthropic-compatible'"></span>
+              <i data-lucide="chevron-down" class="w-3.5 h-3.5 text-muted-foreground transition-transform duration-150" :class="open ? 'rotate-180' : ''"></i>
+            </button>
+            <div x-show="open" x-transition.opacity.duration.100ms
+                 class="absolute z-30 mt-1.5 w-full bg-card border border-border rounded-xl shadow-xl overflow-hidden">
+              <button type="button" @click="providerMgmt.newProvider.api_format = 'openai'; open = false"
+                      class="w-full text-left px-3 py-2 text-sm transition-colors"
+                      :class="providerMgmt.newProvider.api_format === 'openai' ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-secondary'">OpenAI-compatible</button>
+              <button type="button" @click="providerMgmt.newProvider.api_format = 'anthropic'; open = false"
+                      class="w-full text-left px-3 py-2 text-sm transition-colors"
+                      :class="providerMgmt.newProvider.api_format === 'anthropic' ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-secondary'">Anthropic-compatible</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-1.5">
+          <label class="text-[10px] font-600 text-muted-foreground/70 uppercase tracking-[0.1em] font-mono">API Key <span class="normal-case text-muted-foreground/50 font-sans">(optional — add later if you prefer)</span></label>
+          <input x-model="providerMgmt.newProvider.api_key" type="text" placeholder="Paste API key to add it and auto-fetch its models"
+                 class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40">
+        </div>
+
+        <button type="submit" :disabled="providerMgmt.adding || !providerMgmt.newProvider.name.trim() || !providerMgmt.newProvider.prefix.trim() || !providerMgmt.newProvider.base_url.trim()"
+                class="w-full bg-primary text-primary-foreground font-600 px-4 py-2.5 rounded-xl text-sm hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+          <i data-lucide="loader-2" class="w-4 h-4 animate-spin" x-show="providerMgmt.adding"></i>
+          <span x-text="providerMgmt.adding ? (providerMgmt.newProvider.api_key ? 'Adding & fetching models…' : 'Adding…') : 'Add Provider'"></span>
+        </button>
+      </form>
+    </div>
+  </div>
+
   <!-- Toast Container -->
   <div class="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
     <template x-for="t in toasts" :key="t.id">
@@ -1088,6 +1230,17 @@ function dashboard() {
     newKeyType: 'auto',
     newKey: '',
     addingKey: false,
+    detectingKey: false,
+    selectedKeys: [],
+    bulkDeleting: false,
+    providerMgmt: {
+      providers: [],
+      loading: false,
+      adding: false,
+      removing: null,
+      showAddForm: false,
+      newProvider: { name: '', prefix: '', base_url: '', api_format: 'openai', api_key: '' }
+    },
     providers: [
       { id: 'kc',  name: 'Kimchi' },
       { id: 'cv',  name: 'Cavoti' },
@@ -1203,11 +1356,15 @@ function dashboard() {
         if (v === 'playground' && !this.pg.loaded) {
           this.fetchPlaygroundModels();
           this.fetchSessions();
+          if (!this.providerMgmt.providers.length) this.fetchProviders();
           this.pg.loaded = true;
         }
         // Lazy load router keys only when tab is switched
         if (v === 'keys' && this.routerKeys.keys.length === 0) {
           this.fetchRouterKeys();
+        }
+        if (v === 'keys' && this.providerMgmt.providers.length === 0) {
+          this.fetchProviders();
         }
         // Lazy load models only when tab is switched
         if (v === 'models' && !this.models.loaded) {
@@ -1366,6 +1523,85 @@ function dashboard() {
         this.toast(d.success ? 'Key removed' : (d.message || 'Failed'), d.success ? 'success' : 'error');
         this.fetchStatus();
       } catch { this.toast('Network error', 'error'); }
+    },
+
+    // ── Bulk key selection ──
+    toggleKeySelect(prefix) {
+      const i = this.selectedKeys.indexOf(prefix);
+      if (i === -1) this.selectedKeys.push(prefix);
+      else this.selectedKeys.splice(i, 1);
+    },
+    allKeysSelected() {
+      return this.keys.length > 0 && this.selectedKeys.length === this.keys.length;
+    },
+    toggleAllKeys() {
+      this.selectedKeys = this.allKeysSelected() ? [] : this.keys.map(k => k.prefix);
+    },
+    async bulkDeleteSelectedKeys() {
+      if (!this.selectedKeys.length) return;
+      if (!confirm(`Remove ${this.selectedKeys.length} API key(s) permanently?`)) return;
+      this.bulkDeleting = true;
+      try {
+        const r = await fetch('/api/keys/bulk-delete', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ key_prefixes: this.selectedKeys })
+        });
+        const d = await r.json();
+        this.toast(`Removed ${d.removed_count}${d.failed_count ? `, ${d.failed_count} failed` : ''}`, d.failed_count ? 'error' : 'success');
+        this.selectedKeys = [];
+        this.fetchStatus();
+      } catch { this.toast('Network error', 'error'); }
+      finally { this.bulkDeleting = false; }
+    },
+
+    // ── Provider management ──
+    async fetchProviders() {
+      this.providerMgmt.loading = true;
+      try {
+        const r = await fetch('/api/providers');
+        const d = await r.json();
+        this.providerMgmt.providers = d.providers || [];
+      } catch {}
+      finally { this.providerMgmt.loading = false; }
+    },
+    async addProvider() {
+      const np = this.providerMgmt.newProvider;
+      if (!np.name.trim() || !np.prefix.trim() || !np.base_url.trim()) return;
+      this.providerMgmt.adding = true;
+      try {
+        const r = await fetch('/api/providers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(np)
+        });
+        const d = await r.json();
+        if (d.success) {
+          this.toast('Provider added', 'success');
+          this.providerMgmt.newProvider = { name: '', prefix: '', base_url: '', api_format: 'openai', api_key: '' };
+          this.fetchStatus();
+          this.providerMgmt.showAddForm = false;
+          this.fetchProviders();
+        } else {
+          this.toast(d.message || 'Failed to add provider', 'error');
+        }
+      } catch { this.toast('Network error', 'error'); }
+      finally { this.providerMgmt.adding = false; }
+    },
+    async removeProviderAction(prefix, builtin) {
+      const warning = builtin
+        ? `Remove provider "${prefix}"? Its keys will be deleted and it won't route traffic until a key is added for it again.`
+        : `Remove provider "${prefix}" and all its keys? This can't be undone.`;
+      if (!confirm(warning)) return;
+      this.providerMgmt.removing = prefix;
+      try {
+        const r = await fetch(`/api/providers/${encodeURIComponent(prefix)}`, { method: 'DELETE' });
+        const d = await r.json();
+        this.toast(d.success ? 'Provider removed' : (d.message || 'Failed'), d.success ? 'success' : 'error');
+        this.fetchProviders();
+        this.fetchStatus();
+      } catch { this.toast('Network error', 'error'); }
+      finally { this.providerMgmt.removing = null; }
     },
 
     async resetKey(prefix) {
@@ -1631,12 +1867,26 @@ function dashboard() {
       ['weize', 'Weize', m => m],
     ],
     modelGroups() {
-      return this.MODEL_GROUP_DEFS
-        .map(([key, label, fmt]) => ({
-          key, label,
-          options: (this.pg.models[key] || []).map(m => ({ value: m, label: fmt(m) }))
-        }))
-        .filter(g => g.options.length > 0);
+      const knownKeys = new Set(this.MODEL_GROUP_DEFS.map(([key]) => key));
+      const builtinGroups = this.MODEL_GROUP_DEFS.map(([key, label, fmt]) => ({
+        key, label,
+        options: (this.pg.models[key] || []).map(m => ({ value: m, label: fmt(m) }))
+      }));
+      // Custom providers show up as extra top-level keys in pg.models
+      // (see /api/models) -- pick up any we don't already have a fixed
+      // group for instead of hardcoding every provider that gets added.
+      const customGroups = Object.keys(this.pg.models)
+        .filter(key => !knownKeys.has(key))
+        .map(key => {
+          const info = this.providerMgmt.providers.find(p => p.prefix === key);
+          const label = info ? info.name : key;
+          const prefix = `${key}/`;
+          return {
+            key, label,
+            options: (this.pg.models[key] || []).map(m => ({ value: m, label: m.startsWith(prefix) ? m.slice(prefix.length) : m }))
+          };
+        });
+      return [...builtinGroups, ...customGroups].filter(g => g.options.length > 0);
     },
     filteredModelGroups() {
       const q = this.pg.modelSearch.trim().toLowerCase();
