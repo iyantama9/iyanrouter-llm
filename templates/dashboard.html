@@ -357,7 +357,7 @@
           <div class="flex items-center gap-2">
             <span class="text-[9px] font-600 text-muted-foreground/70 uppercase tracking-[0.14em] font-mono">Providers</span>
             <span class="text-[9px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-full border border-border font-mono"
-                  x-text="`${providerMgmt.providers.length} providers`">—</span>
+                  x-text="`${providerMgmt.providers.filter(p => !p.disabled).length} providers`">—</span>
           </div>
           <button @click="providerMgmt.showAddForm = true"
                   class="text-xs text-primary hover:opacity-80 transition-opacity flex items-center gap-1.5">
@@ -379,13 +379,12 @@
                 </tr>
               </thead>
               <tbody>
-                <template x-for="p in providerMgmt.providers" :key="p.prefix">
+                <template x-for="p in providerMgmt.providers.filter(p => !p.disabled)" :key="p.prefix">
                   <tr class="border-b border-border/40 hover:bg-secondary/15 transition-colors">
                     <td class="px-4 py-3">
                       <div class="flex items-center gap-2">
                         <span class="font-medium" x-text="p.name"></span>
                         <span class="font-mono text-[10px] text-muted-foreground/60" x-text="p.prefix + '/'"></span>
-                        <span x-show="p.disabled" class="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-700 uppercase tracking-wider bg-destructive/8 text-destructive border border-destructive/20">Disabled</span>
                       </div>
                     </td>
                     <td class="px-4 py-3 font-mono text-[11px] text-muted-foreground truncate max-w-[220px]" x-text="p.base_url"></td>
