@@ -60,19 +60,19 @@
       --foreground: 0 0% 8%;
       --card: 0 0% 100%;
       --card-foreground: 0 0% 8%;
-      --primary: 17 85% 55%;
+      --primary: 0 0% 12%;
       --primary-foreground: 0 0% 100%;
       --secondary: 0 0% 93%;
       --secondary-foreground: 0 0% 8%;
       --muted: 0 0% 93%;
       --muted-foreground: 0 0% 34%;
-      --accent: 158 50% 38%;
+      --accent: 0 0% 38%;
       --accent-foreground: 0 0% 100%;
       --destructive: 0 72% 51%;
       --destructive-foreground: 0 0% 100%;
       --border: 0 0% 88%;
       --input: 0 0% 88%;
-      --ring: 17 85% 55%;
+      --ring: 0 0% 12%;
       --radius: 0.875rem;
     }
 
@@ -81,51 +81,61 @@
       --foreground: 0 0% 92%;
       --card: 0 0% 7%;
       --card-foreground: 0 0% 92%;
-      --primary: 17 85% 55%;
-      --primary-foreground: 0 0% 4%;
+      --primary: 0 0% 96%;
+      --primary-foreground: 0 0% 8%;
       --secondary: 0 0% 11%;
       --secondary-foreground: 0 0% 92%;
       --muted: 0 0% 11%;
       --muted-foreground: 0 0% 82%;
-      --accent: 158 50% 38%;
-      --accent-foreground: 0 0% 4%;
+      --accent: 0 0% 70%;
+      --accent-foreground: 0 0% 8%;
       --destructive: 0 72% 51%;
       --destructive-foreground: 0 0% 100%;
       --border: 0 0% 15%;
       --input: 0 0% 11%;
-      --ring: 17 85% 55%;
+      --ring: 0 0% 96%;
     }
 
-    /* Plain white dot grid, slowly drifting and breathing so the page has a
-       sense of life without an accent-coloured spotlight competing with the
-       content for attention. */
-    body, .grid-bg {
-      background-image: radial-gradient(currentColor 1.35px, transparent 1.35px);
-      background-size: 26px 26px;
-      animation: grid-drift 26s linear infinite, grid-breathe 9s ease-in-out infinite;
+    /* Interactive dot grid.
+
+       This lives on its own fixed layer rather than on body/.grid-bg. The
+       previous version set an animated `color` on those elements so the dot
+       gradient could use currentColor -- but `color` inherits, so every bit
+       of text without an explicit colour inherited the animation too and
+       visibly flickered. Nothing here touches text colour. */
+    .dot-layer {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      --dot-size: 26px;
+      --dot-base: rgba(255, 255, 255, 0.13);
+      --dot-hot: rgba(255, 255, 255, 0.85);
+      --spot: 190px;
+      background-image: radial-gradient(var(--dot-base) 1.3px, transparent 1.3px);
+      background-size: var(--dot-size) var(--dot-size);
+    }
+    html:not(.dark) .dot-layer {
+      --dot-base: rgba(0, 0, 0, 0.11);
+      --dot-hot: rgba(0, 0, 0, 0.6);
     }
 
-    html:not(.dark) body,
-    html:not(.dark) .grid-bg {
-      animation: grid-drift 26s linear infinite, grid-breathe-light 9s ease-in-out infinite;
+    /* Brighter copy of the same grid, revealed only around the cursor. */
+    .dot-layer::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background-image: radial-gradient(var(--dot-hot) 1.5px, transparent 1.5px);
+      background-size: var(--dot-size) var(--dot-size);
+      -webkit-mask-image: radial-gradient(circle var(--spot) at var(--mx, -999px) var(--my, -999px), #000 0%, rgba(0,0,0,0.35) 45%, transparent 72%);
+      mask-image: radial-gradient(circle var(--spot) at var(--mx, -999px) var(--my, -999px), #000 0%, rgba(0,0,0,0.35) 45%, transparent 72%);
+      transition: opacity 0.3s ease;
+      opacity: 0;
     }
-
-    @keyframes grid-drift {
-      from { background-position: 0 0; }
-      to   { background-position: 26px 26px; }
-    }
-    @keyframes grid-breathe {
-      0%, 100% { color: rgba(255,255,255,0.10); }
-      50%      { color: rgba(255,255,255,0.22); }
-    }
-    @keyframes grid-breathe-light {
-      0%, 100% { color: rgba(0,0,0,0.08); }
-      50%      { color: rgba(0,0,0,0.16); }
-    }
+    .dot-layer.is-active::after { opacity: 1; }
 
     @media (prefers-reduced-motion: reduce) {
-      body, .grid-bg { animation: none; color: rgba(255,255,255,0.16); }
-      html:not(.dark) body, html:not(.dark) .grid-bg { color: rgba(0,0,0,0.12); }
+      .dot-layer::after { transition: none; }
     }
 
     /* Force readable body text in rendered markdown regardless of whether the
@@ -211,8 +221,31 @@
   {% block head %}{% endblock %}
 </head>
 <body class="bg-background text-foreground font-body antialiased">
+  <div class="dot-layer" id="dot-layer" aria-hidden="true"></div>
   {% block content %}{% endblock %}
 
+  <script>
+    // Feed the cursor position to the dot layer so the bright grid follows it.
+    // rAF-throttled: mousemove fires far more often than we can paint.
+    (function () {
+      var layer = document.getElementById('dot-layer');
+      if (!layer) return;
+      var x = 0, y = 0, queued = false;
+      function paint() {
+        queued = false;
+        layer.style.setProperty('--mx', x + 'px');
+        layer.style.setProperty('--my', y + 'px');
+      }
+      window.addEventListener('pointermove', function (e) {
+        x = e.clientX; y = e.clientY;
+        layer.classList.add('is-active');
+        if (!queued) { queued = true; requestAnimationFrame(paint); }
+      }, { passive: true });
+      window.addEventListener('pointerleave', function () {
+        layer.classList.remove('is-active');
+      });
+    })();
+  </script>
   <script>lucide.createIcons();</script>
   {% block scripts %}{% endblock %}
 </body>

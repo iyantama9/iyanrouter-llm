@@ -2,7 +2,7 @@
 {% block title %}Iyan Router | Dashboard{% endblock %}
 
 {% block content %}
-<div class="min-h-screen flex bg-background grid-bg" x-data="dashboard()" x-init="init()">
+<div class="min-h-screen flex bg-background" x-data="dashboard()" x-init="init()">
 
   <!-- Mobile overlay -->
   <div x-show="sidebarOpen" x-transition.opacity
@@ -282,69 +282,16 @@
            x-transition:enter-end="opacity-100 translate-y-0">
 
         <!-- Router API Keys Section -->
-        <div class="flex items-center gap-2">
-          <span class="text-[9px] font-600 text-muted-foreground/70 uppercase tracking-[0.14em] font-mono">Router API Keys</span>
-          <span class="text-[9px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-full border border-border font-mono"
-                x-text="`${routerKeys.keys.length} keys`">—</span>
-        </div>
-
-        <!-- Generate router key form -->
-        <div class="p-5 bg-card border border-border rounded-2xl space-y-4">
-          <p class="text-[9px] font-600 text-muted-foreground uppercase tracking-[0.14em] font-mono">Generate Router API Key</p>
-          <form @submit.prevent="generateRouterKey" class="space-y-4">
-            <div class="grid sm:grid-cols-3 gap-3">
-              <div class="space-y-1.5 sm:col-span-3">
-                <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">Key Name</label>
-                <input x-model="routerKeys.newKeyName" type="text" placeholder="e.g. Production, Mobile app"
-                       class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground placeholder:text-muted-foreground/50"
-                       :disabled="routerKeys.generating">
-              </div>
-
-              <div class="space-y-1.5">
-                <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">Valid For</label>
-                <div class="relative" x-data="{ open: false }" @click.outside="open = false">
-                  <button type="button" @click="open = !open"
-                          class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground flex items-center justify-between gap-2">
-                    <span x-text="expiryLabel()"></span>
-                    <i data-lucide="chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform" :class="open ? 'rotate-180' : ''"></i>
-                  </button>
-                  <div x-show="open" x-transition.opacity.duration.100ms
-                       class="absolute z-30 mt-1.5 w-full bg-card border border-border rounded-xl shadow-xl overflow-hidden">
-                    <template x-for="opt in routerKeys.expiryOptions" :key="opt.days">
-                      <button type="button" @click="routerKeys.expiresInDays = opt.days; open = false"
-                              class="w-full text-left px-3 py-2 text-sm transition-colors"
-                              :class="routerKeys.expiresInDays === opt.days ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-secondary'"
-                              x-text="opt.label"></button>
-                    </template>
-                  </div>
-                </div>
-              </div>
-
-              <div class="space-y-1.5">
-                <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">Token Quota</label>
-                <input x-model.number="routerKeys.tokenQuota" type="number" min="0" step="1000" placeholder="0 = unlimited"
-                       class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground placeholder:text-muted-foreground/50">
-                <p class="text-[10px] text-muted-foreground/70">Counted by this router, not provider billing.</p>
-              </div>
-
-              <div class="space-y-1.5">
-                <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">Allowed Models</label>
-                <button type="button" @click="openModelPicker()"
-                        class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground flex items-center justify-between gap-2">
-                  <span class="truncate" x-text="routerKeys.selectedModels.length ? `${routerKeys.selectedModels.length} selected` : 'All models'"></span>
-                  <i data-lucide="list-filter" class="w-3.5 h-3.5 shrink-0 text-muted-foreground"></i>
-                </button>
-                <p class="text-[10px] text-muted-foreground/70">Leave empty to allow every model.</p>
-              </div>
-            </div>
-
-            <button type="submit" :disabled="!routerKeys.newKeyName.trim() || routerKeys.generating"
-                    class="bg-primary text-primary-foreground font-600 px-4 py-2.5 rounded-xl text-sm hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2 w-full sm:w-auto">
-              <i data-lucide="key" class="w-4 h-4" x-show="!routerKeys.generating"></i>
-              <i data-lucide="loader-2" class="w-4 h-4 animate-spin" x-show="routerKeys.generating"></i>
-              <span x-text="routerKeys.generating ? 'Generating…' : 'Generate Key'"></span>
-            </button>
-          </form>
+        <div class="flex items-center justify-between gap-3">
+          <div class="flex items-center gap-2">
+            <span class="text-[9px] font-600 text-muted-foreground uppercase tracking-[0.14em] font-mono">Router API Keys</span>
+            <span class="text-[9px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-full border border-border font-mono"
+                  x-text="`${routerKeys.keys.length} keys`">&#8212;</span>
+          </div>
+          <button @click="openKeyForm()"
+                  class="text-xs text-primary hover:opacity-80 transition-opacity flex items-center gap-1.5">
+            <i data-lucide="plus" class="w-3.5 h-3.5"></i> Generate Key
+          </button>
         </div>
 
         <!-- Router keys table -->
@@ -1423,6 +1370,92 @@
   </div>
 
 
+
+  <!-- Generate router API key -->
+  <div x-show="routerKeys.formOpen" x-transition.opacity
+       class="fixed inset-0 z-[92] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
+       @keydown.escape.window="routerKeys.formOpen = false">
+    <div class="absolute inset-0" @click="routerKeys.formOpen = false"></div>
+    <div class="relative w-full max-w-lg max-h-[88vh] overflow-y-auto bg-card border border-border rounded-2xl shadow-2xl">
+      <div class="px-5 py-4 border-b border-border flex items-center justify-between gap-4 sticky top-0 bg-card z-10">
+        <h3 class="font-display text-lg font-700 tracking-wide text-foreground">Generate Router API Key</h3>
+        <button @click="routerKeys.formOpen = false"
+                class="p-2 rounded-xl text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <form @submit.prevent="generateRouterKey" class="p-5 space-y-4">
+        <div class="space-y-1.5">
+          <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">Key Name</label>
+          <input x-model="routerKeys.newKeyName" type="text" placeholder="e.g. Production, Mobile app"
+                 class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground placeholder:text-muted-foreground/50"
+                 :disabled="routerKeys.generating">
+        </div>
+
+        <div class="space-y-1.5">
+          <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">Valid For</label>
+          <div class="relative" x-data="{ open: false }" @click.outside="open = false">
+            <button type="button" @click="open = !open"
+                    class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground flex items-center justify-between gap-2">
+              <span x-text="expiryLabel()"></span>
+              <i data-lucide="chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform" :class="open ? 'rotate-180' : ''"></i>
+            </button>
+            <div x-show="open" x-transition.opacity.duration.100ms
+                 class="absolute z-30 mt-1.5 w-full bg-card border border-border rounded-xl shadow-xl overflow-hidden">
+              <template x-for="opt in routerKeys.expiryOptions" :key="opt.days">
+                <button type="button" @click="routerKeys.expiresInDays = opt.days; open = false"
+                        class="w-full text-left px-3 py-2 text-sm transition-colors"
+                        :class="routerKeys.expiresInDays === opt.days ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-secondary'"
+                        x-text="opt.label"></button>
+              </template>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-1.5">
+          <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">Token Quota</label>
+          <div class="relative" x-data="{ open: false }" @click.outside="open = false">
+            <button type="button" @click="open = !open"
+                    class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground flex items-center justify-between gap-2">
+              <span x-text="quotaLabel()"></span>
+              <i data-lucide="chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform" :class="open ? 'rotate-180' : ''"></i>
+            </button>
+            <div x-show="open" x-transition.opacity.duration.100ms
+                 class="absolute z-30 mt-1.5 w-full max-h-56 overflow-y-auto bg-card border border-border rounded-xl shadow-xl">
+              <template x-for="opt in routerKeys.quotaOptions" :key="opt.value">
+                <button type="button" @click="routerKeys.quotaPreset = opt.value; open = false"
+                        class="w-full text-left px-3 py-2 text-sm transition-colors"
+                        :class="routerKeys.quotaPreset === opt.value ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-secondary'"
+                        x-text="opt.label"></button>
+              </template>
+            </div>
+          </div>
+          <input x-show="routerKeys.quotaPreset === 'custom'" x-model.number="routerKeys.tokenQuota"
+                 type="number" min="1" step="1000" placeholder="Tokens"
+                 class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground placeholder:text-muted-foreground/50">
+          <p class="text-[10px] text-muted-foreground/70">Counted by this router (input + output), not provider billing.</p>
+        </div>
+
+        <div class="space-y-1.5">
+          <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">Allowed Models</label>
+          <button type="button" @click="openModelPicker()"
+                  class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground flex items-center justify-between gap-2">
+            <span class="truncate" x-text="routerKeys.selectedModels.length ? `${routerKeys.selectedModels.length} selected` : 'All models'"></span>
+            <i data-lucide="list-filter" class="w-3.5 h-3.5 shrink-0 text-muted-foreground"></i>
+          </button>
+          <p class="text-[10px] text-muted-foreground/70">Leave empty to allow every model.</p>
+        </div>
+
+        <button type="submit" :disabled="!routerKeys.newKeyName.trim() || routerKeys.generating"
+                class="w-full bg-primary text-primary-foreground font-600 px-4 py-2.5 rounded-xl text-sm hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+          <i data-lucide="key" class="w-4 h-4" x-show="!routerKeys.generating"></i>
+          <i data-lucide="loader-2" class="w-4 h-4 animate-spin" x-show="routerKeys.generating"></i>
+          <span x-text="routerKeys.generating ? 'Generating…' : 'Generate Key'"></span>
+        </button>
+      </form>
+    </div>
+  </div>
   <!-- Allowed-models picker for router API keys -->
   <div x-show="routerKeys.pickerOpen" x-transition.opacity
        class="fixed inset-0 z-[95] bg-black/70 backdrop-blur-sm flex items-center justify-center p-4"
@@ -1562,8 +1595,18 @@ function dashboard() {
       keys: [],
       newKeyName: '',
       generating: false,
+      formOpen: false,
       expiresInDays: 0,
-      tokenQuota: 0,
+      quotaPreset: 'unlimited',
+      tokenQuota: 100000,
+      quotaOptions: [
+        { value: 'unlimited', label: 'Unlimited' },
+        { value: 100000,      label: '100,000 tokens' },
+        { value: 500000,      label: '500,000 tokens' },
+        { value: 1000000,     label: '1,000,000 tokens' },
+        { value: 5000000,     label: '5,000,000 tokens' },
+        { value: 'custom',    label: 'Custom…' },
+      ],
       selectedModels: [],
       expiryOptions: [
         { days: 0,   label: 'Never expires' },
@@ -2067,6 +2110,29 @@ function dashboard() {
       return opt ? opt.label : `${this.routerKeys.expiresInDays} days`;
     },
 
+    quotaLabel() {
+      const opt = this.routerKeys.quotaOptions.find(o => o.value === this.routerKeys.quotaPreset);
+      return opt ? opt.label : 'Unlimited';
+    },
+
+    // 0 is what the API treats as "no ceiling".
+    resolvedQuota() {
+      const p = this.routerKeys.quotaPreset;
+      if (p === 'unlimited') return 0;
+      if (p === 'custom') return Math.max(0, Number(this.routerKeys.tokenQuota) || 0);
+      return Number(p) || 0;
+    },
+
+    openKeyForm() {
+      this.routerKeys.newKeyName = '';
+      this.routerKeys.expiresInDays = 0;
+      this.routerKeys.quotaPreset = 'unlimited';
+      this.routerKeys.tokenQuota = 100000;
+      this.routerKeys.selectedModels = [];
+      this.routerKeys.formOpen = true;
+      this.$nextTick(() => lucide.createIcons());
+    },
+
     async openModelPicker() {
       // The picker lists every routable model, so make sure we actually have
       // them before opening -- the Models tab may never have been visited.
@@ -2123,7 +2189,7 @@ function dashboard() {
           body: JSON.stringify({
             key_name: this.routerKeys.newKeyName,
             expires_in_days: this.routerKeys.expiresInDays || 0,
-            token_quota: this.routerKeys.tokenQuota || 0,
+            token_quota: this.resolvedQuota(),
             allowed_models: this.routerKeys.selectedModels,
           })
         });
@@ -2135,8 +2201,10 @@ function dashboard() {
           this.routerKeys.keys.unshift(d.key);
           this.routerKeys.newKeyName = '';
           this.routerKeys.expiresInDays = 0;
-          this.routerKeys.tokenQuota = 0;
+          this.routerKeys.quotaPreset = 'unlimited';
+          this.routerKeys.tokenQuota = 100000;
           this.routerKeys.selectedModels = [];
+          this.routerKeys.formOpen = false;
           this.toast('Router API key generated! Copy it now - it won\'t be shown again.', 'success');
           this.$nextTick(() => lucide.createIcons());
         }
