@@ -175,6 +175,9 @@ def build_openai_request(body, provider="kc", session_history=None):
         fallback = config.KIMCHI_MODELS[-1] if config.KIMCHI_MODELS else ""
         model_str = claude_model.lower()
 
+        # Claude-family aliases are mapped on purpose: Claude Code and similar
+        # clients hardcode "claude-sonnet-*"/"claude-haiku-*"/"claude-opus-*"
+        # and expect *something* to answer.
         if "sonnet" in model_str:
             openai_model = config.KIMCHI_MODELS[-1] if len(config.KIMCHI_MODELS) >= 1 else fallback
         elif "haiku" in model_str:
@@ -182,7 +185,12 @@ def build_openai_request(body, provider="kc", session_history=None):
         elif "opus" in model_str or "grok" in model_str:
             openai_model = config.KIMCHI_MODELS[1] if len(config.KIMCHI_MODELS) >= 2 else fallback
         else:
-            openai_model = claude_model if claude_model in config.KIMCHI_MODELS else fallback
+            # Anything else is an explicit model choice -- pass it through
+            # untouched. Silently rewriting it to KIMCHI_MODELS[-1] meant
+            # asking for one model and getting a different one back, with
+            # nothing in the response saying so (a request for kc/gpt-4o-mini
+            # would answer, truthfully, as whatever model actually ran).
+            openai_model = claude_model
 
     messages = to_openai_messages(body)
 

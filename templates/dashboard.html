@@ -624,7 +624,8 @@
             </div>
 
             <!-- Messages -->
-            <div class="flex-1 overflow-y-auto p-4 space-y-4" id="chat-container">
+            <div class="flex-1 overflow-y-auto p-4 space-y-4" id="chat-container"
+                 @scroll="onChatScroll()" @click="onChatClick($event)">
               <template x-if="pg.messages.length === 0">
                 <div class="h-full flex flex-col items-center justify-center text-muted-foreground opacity-40 select-none">
                   <i data-lucide="bot" class="w-10 h-10 mb-3"></i>
@@ -638,7 +639,7 @@
                          ? 'bg-primary/10 text-foreground border border-primary/20 rounded-br-sm'
                          : 'bg-secondary text-foreground border border-border/60 rounded-bl-sm'">
                     <div class="text-[9px] font-700 uppercase tracking-[0.14em] mb-1.5 opacity-40 font-mono" x-text="msg.role"></div>
-                    <div class="prose prose-sm dark:prose-invert max-w-none [&>p:last-child]:mb-0 overflow-hidden" x-html="renderMarkdown(msg.content)"></div>
+                    <div class="prose prose-sm dark:prose-invert max-w-none [&>p:last-child]:mb-0 overflow-hidden" x-html="msg.html"></div>
                   </div>
                 </div>
               </template>
@@ -941,82 +942,148 @@
            x-transition:enter-start="opacity-0 translate-y-1"
            x-transition:enter-end="opacity-100 translate-y-0">
 
-        <div class="flex items-center justify-between">
-          <span class="text-[9px] font-600 text-muted-foreground/70 uppercase tracking-[0.14em] font-mono">Visual Routing</span>
-          <button @click="drawRoutingLines()"
-                  class="text-[11px] font-medium border border-border px-3 py-1.5 rounded-xl bg-secondary hover:bg-secondary/60 transition-colors text-muted-foreground hover:text-foreground">
-            Refresh Lines
-          </button>
+        <!-- Header + range selector -->
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <div class="flex items-center gap-2">
+            <span class="text-[9px] font-600 text-muted-foreground/70 uppercase tracking-[0.14em] font-mono">Traffic Flow</span>
+            <span class="text-[9px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-full border border-border font-mono"
+                  x-text="routing.loading ? 'loading…' : `${routing.providers.filter(p => p.requests > 0).length} / ${routing.providers.length} providers used`">—</span>
+          </div>
+          <div class="flex items-center gap-1 p-1 bg-secondary border border-border rounded-xl">
+            <template x-for="r in ['today','24h','7d','30d','60d']" :key="r">
+              <button @click="setRoutingRange(r)"
+                      class="px-3 py-1 rounded-lg text-[11px] font-600 transition-colors"
+                      :class="routing.range === r ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
+                      x-text="r === 'today' ? 'Today' : r.toUpperCase()"></button>
+            </template>
+          </div>
         </div>
 
-        <div class="bg-card border border-border rounded-2xl p-6 min-h-[580px] overflow-hidden relative" id="routing-canvas">
-          <div class="flex justify-between h-full relative z-10 gap-8">
+        <!-- Stat cards -->
+        <div class="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          <template x-for="card in routingCards()" :key="card.label">
+            <div class="bg-card border border-border rounded-2xl p-4 relative overflow-hidden group hover:border-primary/30 transition-colors">
+              <div class="flex items-center gap-2 mb-3">
+                <i :data-lucide="card.icon" class="w-3.5 h-3.5 text-muted-foreground/60"></i>
+                <span class="text-[9px] font-600 text-muted-foreground/70 uppercase tracking-[0.14em] font-mono" x-text="card.label"></span>
+              </div>
+              <div class="text-xl lg:text-2xl font-mono font-500 tabular-nums leading-none mb-1"
+                   :class="card.tone" x-text="card.value">—</div>
+              <div class="text-[10px] text-muted-foreground/60" x-text="card.sub"></div>
+            </div>
+          </template>
+        </div>
 
-            <!-- Providers Column -->
-            <div class="flex flex-col justify-around gap-8 w-56 shrink-0">
-              <template x-for="prov in providers" :key="prov.id">
-                <div :id="`node-prov-${prov.id}`"
-                     class="bg-secondary border border-border rounded-2xl p-4 flex items-center gap-3 relative hover:border-primary/30 transition-colors cursor-default">
-                  <div class="w-8 h-8 rounded flex items-center justify-center shrink-0 border"
-                       :class="prov.id === 'kc'  ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' :
-                               prov.id === 'cv'  ? 'bg-sky-500/10 text-sky-400 border-sky-500/20' :
-                               prov.id === 'bm'  ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' :
-                               prov.id === 'nry' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-                               prov.id === 'dahl' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
-                               'bg-purple-500/10 text-purple-400 border-purple-500/20'">
-                    <i data-lucide="network" class="w-4 h-4"></i>
-                  </div>
-                  <div>
-                    <h3 class="font-display font-700 text-sm tracking-wide" x-text="prov.name"></h3>
-                    <p class="text-[9px] text-muted-foreground uppercase tracking-[0.14em] mt-0.5">Provider</p>
-                  </div>
-                  <div class="absolute -right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full bg-border border-2 border-card z-20"
-                       :id="`outlet-prov-${prov.id}`"></div>
-                </div>
-              </template>
+        <div class="grid lg:grid-cols-3 gap-4">
+          <!-- Radial routing graph -->
+          <div class="lg:col-span-2 bg-card border border-border rounded-2xl overflow-hidden">
+            <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+              <span class="text-[9px] font-600 text-muted-foreground/70 uppercase tracking-[0.14em] font-mono">Router Topology</span>
+              <span class="text-[9px] text-muted-foreground font-mono flex items-center gap-1.5">
+                <span class="w-1.5 h-1.5 rounded-full bg-primary" :class="anyProviderPulsing() ? 'animate-ping' : ''"></span>
+                <span x-text="anyProviderPulsing() ? 'live traffic' : 'idle'"></span>
+              </span>
             </div>
 
-            <!-- API Keys Column -->
-            <div class="flex flex-col gap-3 flex-1 overflow-y-auto pr-1 max-h-[700px]"
-                 @scroll="lines.forEach(l => l.position())">
-              <template x-for="k in keys" :key="k.prefix">
-                <div :id="`node-key-${k.prefix}`"
-                     @click="setActiveKey(k.prefix, k.is_cv ? 'cv' : k.is_bm ? 'bm' : k.is_nr ? 'nry' : k.is_dahl ? 'dahl' : k.is_qc ? 'qc' : k.is_marketku ? 'marketku' : k.is_atomesus ? 'atomesus' : k.is_weize ? 'weize' : 'kc')"
-                     class="border rounded-2xl p-3 flex flex-col gap-2 relative cursor-pointer transition-all hover:-translate-x-0.5 hover:shadow-sm"
-                     :class="k.status === 'Active'
-                       ? 'bg-card border-primary/40 ring-1 ring-primary/10'
-                       : 'bg-secondary/30 border-border/50 opacity-55 hover:opacity-90'">
-                  <div class="absolute -left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 rounded-full border-2 border-card z-20"
-                       :class="k.status === 'Active' ? 'bg-primary ring-4 ring-primary/10' : 'bg-border'"
-                       :id="`inlet-key-${k.prefix}`"></div>
+            <div class="relative w-full h-[420px]">
+              <template x-if="!routing.providers.length">
+                <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+                  <i data-lucide="network" class="w-8 h-8 opacity-20"></i>
+                  <p class="text-sm font-medium">No providers configured</p>
+                </div>
+              </template>
 
-                  <div class="flex justify-between items-center gap-2">
-                    <div class="flex items-center gap-1.5 font-mono text-[11px] font-500 min-w-0">
-                      <i data-lucide="key" class="w-3 h-3 text-muted-foreground/50 shrink-0"></i>
-                      <span class="truncate" x-text="k.masked"></span>
+              <!-- Connectors. viewBox is a 0-100 percentage space so the lines
+                   land on the same coordinates as the absolutely-positioned
+                   HTML nodes; non-scaling-stroke keeps the stroke uniform
+                   despite preserveAspectRatio="none" squashing the space. -->
+              <!-- Built with x-html rather than <template x-for>: a template
+                   inside an <svg> is parsed in the HTML namespace, so Alpine's
+                   clones come out as unrendered HTML <line> elements. Setting
+                   innerHTML on the <svg> itself parses in the SVG namespace. -->
+              <svg class="absolute inset-0 w-full h-full pointer-events-none"
+                   viewBox="0 0 100 100" preserveAspectRatio="none"
+                   x-html="connectorMarkup()"></svg>
+
+              <!-- Hub -->
+              <div class="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-10">
+                <div class="relative">
+                  <div x-show="anyProviderPulsing()"
+                       class="absolute inset-0 rounded-2xl bg-primary/25 animate-ping"></div>
+                  <div class="relative flex items-center gap-2 px-4 py-3 rounded-2xl bg-primary text-primary-foreground border border-primary shadow-lg shadow-primary/20">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+                      <circle cx="12" cy="5" r="2.5"/><circle cx="4.5" cy="19" r="2.5"/><circle cx="19.5" cy="19" r="2.5"/>
+                      <path d="M12 7.5v4m0 0-6 5m6-5 6 5"/>
+                    </svg>
+                    <div class="leading-none">
+                      <div class="font-display text-xs font-700 tracking-widest uppercase">Iyan Router</div>
+                      <div class="text-[9px] opacity-70 font-mono mt-1" x-text="`${formatNumber(routing.totals.requests)} req`"></div>
                     </div>
-                    <span class="text-[9px] uppercase tracking-wider font-700 px-1.5 py-0.5 rounded shrink-0"
-                          :class="k.status === 'Active' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'"
-                          x-text="k.status"></span>
                   </div>
+                </div>
+              </div>
 
-                  <div>
-                    <span class="text-[9px] font-700 uppercase tracking-wider px-1.5 py-0.5 rounded"
-                          :class="k.is_cv ? 'bg-sky-500/10 text-sky-400' :
-                                  k.is_bm ? 'bg-violet-500/10 text-violet-400' :
-                                  k.is_nr ? 'bg-emerald-500/10 text-emerald-400' :
-                                  k.is_dahl ? 'bg-rose-500/10 text-rose-400' :
-                                  k.is_qc ? 'bg-purple-500/10 text-purple-400' :
-                                  k.is_marketku ? 'bg-green-500/10 text-green-400' :
-                                  k.is_atomesus ? 'bg-cyan-500/10 text-cyan-400' :
-                                  k.is_weize ? 'bg-amber-500/10 text-amber-400' :
-                                  'bg-orange-500/10 text-orange-400'"
-                          x-text="k.is_cv ? 'Cavoti' : k.is_bm ? 'Bluesminds' : k.is_nr ? 'byNara' : k.is_dahl ? 'Dahl' : k.is_qc ? 'Qwen Cloud' : k.is_marketku ? 'MarketKu' : k.is_atomesus ? 'Atomesus' : k.is_weize ? 'Weize' : 'Kimchi'"></span>
+              <!-- Provider nodes -->
+              <template x-for="node in routingNodes()" :key="node.prefix">
+                <div class="absolute -translate-x-1/2 -translate-y-1/2 w-[150px] z-10"
+                     :style="`left:${node.x}%; top:${node.y}%`">
+                  <div class="rounded-xl border p-2.5 transition-all duration-300 bg-card"
+                       :class="node.live ? 'border-primary shadow-lg shadow-primary/20 scale-[1.04]'
+                               : node.hasTraffic ? 'border-primary/30' : 'border-border opacity-70'">
+                    <div class="flex items-center gap-2 mb-1.5 min-w-0">
+                      <span class="w-5 h-5 rounded flex items-center justify-center shrink-0 text-[9px] font-700 uppercase border"
+                            :class="node.accent" x-text="node.prefix.slice(0,2)"></span>
+                      <span class="text-[11px] font-600 truncate" x-text="node.name"></span>
+                    </div>
+                    <div class="flex items-center justify-between gap-2 text-[9px] font-mono text-muted-foreground">
+                      <span x-text="`${formatNumber(node.requests)} req`"></span>
+                      <span x-text="`${node.key_count} keys`"></span>
+                    </div>
+                    <div x-show="node.requests > 0" class="mt-1.5 flex items-center gap-1.5 text-[9px] font-mono">
+                      <span class="text-primary" x-text="`↑${compactNumber(node.input_tokens)}`"></span>
+                      <span class="text-accent" x-text="`↓${compactNumber(node.output_tokens)}`"></span>
+                      <span x-show="node.errors > 0" class="text-destructive" x-text="`${node.errors} err`"></span>
+                    </div>
                   </div>
                 </div>
               </template>
             </div>
+          </div>
 
+          <!-- Recent requests -->
+          <div class="bg-card border border-border rounded-2xl overflow-hidden flex flex-col">
+            <div class="px-4 py-3 border-b border-border flex items-center justify-between shrink-0">
+              <span class="text-[9px] font-600 text-muted-foreground/70 uppercase tracking-[0.14em] font-mono">Recent Requests</span>
+              <span class="text-[9px] text-muted-foreground font-mono" x-text="`${routing.recent.length} rows`"></span>
+            </div>
+            <div class="overflow-y-auto max-h-[420px]">
+              <template x-if="!routing.recent.length">
+                <div class="px-4 py-14 text-center">
+                  <div class="flex flex-col items-center gap-3 text-muted-foreground">
+                    <i data-lucide="activity" class="w-8 h-8 opacity-20"></i>
+                    <p class="text-sm font-medium">No requests in this range</p>
+                  </div>
+                </div>
+              </template>
+              <template x-for="(r, i) in routing.recent" :key="i">
+                <div class="px-4 py-2.5 border-b border-border/40 hover:bg-secondary/15 transition-colors">
+                  <div class="flex items-center justify-between gap-2 mb-1">
+                    <div class="flex items-center gap-1.5 min-w-0">
+                      <span class="w-1.5 h-1.5 rounded-full shrink-0"
+                            :class="r.status_code >= 400 ? 'bg-destructive' : 'bg-accent'"></span>
+                      <span class="font-mono text-[11px] text-foreground truncate" x-text="r.model"></span>
+                    </div>
+                    <span class="text-[10px] text-muted-foreground font-mono shrink-0" x-text="timeAgo(r.created_at)"></span>
+                  </div>
+                  <div class="flex items-center gap-2.5 text-[10px] font-mono pl-3">
+                    <span class="text-primary" x-text="`↑${compactNumber(r.input_tokens)}`"></span>
+                    <span class="text-accent" x-text="`↓${compactNumber(r.output_tokens)}`"></span>
+                    <span x-show="r.cached_tokens > 0" class="text-sky-400" x-text="`⚡${compactNumber(r.cached_tokens)}`"></span>
+                    <span class="text-muted-foreground/60 ml-auto" x-text="`${(r.latency_ms/1000).toFixed(1)}s`"></span>
+                  </div>
+                </div>
+              </template>
+            </div>
           </div>
         </div>
       </div>
@@ -1258,7 +1325,6 @@ function dashboard() {
       { id: 'atomesus', name: 'Atomesus' },
       { id: 'weize', name: 'Weize' }
     ],
-    lines: [],
     pg: {
       loaded: false,
       model: 'kc/gpt-4o-mini',
@@ -1272,7 +1338,8 @@ function dashboard() {
       editingSessionName: '',
       attachedFile: null,
       modelDropdownOpen: false,
-      modelSearch: ''
+      modelSearch: '',
+      stickToBottom: true
     },
 
     brain: {
@@ -1326,9 +1393,21 @@ function dashboard() {
       sort_order: 'DESC', loading: true
     },
 
+    routing: {
+      range: 'today',
+      loading: false,
+      loaded: false,
+      totals: { requests: 0, input_tokens: 0, output_tokens: 0, cached_tokens: 0, avg_latency_ms: 0, errors: 0 },
+      providers: [],
+      recent: [],
+      activePulse: {},   // prefix -> timestamp of last request, drives the connector animation
+    },
+
     keys: [],
     toasts: [],
     sparkHistory: [],
+    _providersSignature: null,
+    _routingRefreshTimer: null,
     _sse: null,
     _poll: null,
 
@@ -1350,9 +1429,7 @@ function dashboard() {
 
       this.$watch('activeTab', v => {
         if (v === 'routing') {
-          setTimeout(() => this.drawRoutingLines(), 300);
-        } else {
-          this.destroyLines();
+          this.fetchRoutingStats();
         }
         // Lazy load brain monitor only when tab is switched
         if (v === 'brain' && !this.brain.loaded) {
@@ -1399,7 +1476,11 @@ function dashboard() {
           try {
             const data = JSON.parse(e.data);
             if (data.type === 'status') this.applyStatus(data.payload);
-            if (data.type === 'log') this.prependLog(data.payload);
+            if (data.type === 'log') {
+              this.prependLog(data.payload);
+              this.pulseProvider(data.payload?.provider);
+              if (this.activeTab === 'routing') this.scheduleRoutingRefresh();
+            }
           } catch {}
         };
         this._sse = evt;
@@ -1423,6 +1504,19 @@ function dashboard() {
     },
 
     applyStatus(d) {
+      // The provider/model catalog changed somewhere (provider added or
+      // removed, models refreshed) -- pull the new lists instead of leaving
+      // the pickers showing models that no longer exist.
+      if (d.providers_signature && d.providers_signature !== this._providersSignature) {
+        const isFirstSeen = this._providersSignature === null;
+        this._providersSignature = d.providers_signature;
+        if (!isFirstSeen) {
+          this.fetchProviders();
+          if (this.pg.loaded) this.fetchPlaygroundModels();
+          this.models.loaded = false;
+          if (this.activeTab === 'models') this.fetchModels();
+        }
+      }
       this.stats = d;
       let newKeys = d.keys || [];
       newKeys.sort((a, b) => {
@@ -1866,14 +1960,78 @@ function dashboard() {
         if (r.ok) {
           const d = await r.json();
           this.pg.models = { kimchi: [], cavoti: [], bluesminds: [], bynara: [], dahl: [], qwen_cloud: [], marketku: [], atomesus: [], weize: [], ...d };
-          if (d.kimchi && d.kimchi.length) this.pg.model = d.kimchi[0];
+          // Only keep the current selection if it still exists. The old code
+          // shipped a hardcoded default (kc/gpt-4o-mini) that no provider
+          // actually served, and the backend used to quietly answer it with
+          // a different model instead of erroring -- which is why replies
+          // introduced themselves as some other model entirely.
+          const all = this.modelGroups().flatMap(g => g.options.map(o => o.value));
+          if (!all.includes(this.pg.model)) this.pg.model = all[0] || '';
         }
       } catch {}
     },
 
     renderMarkdown(txt) {
       if (!window.marked || !window.DOMPurify) return txt;
-      return DOMPurify.sanitize(marked.parse(txt));
+      const clean = DOMPurify.sanitize(marked.parse(txt || ''));
+      // Tag images so they get the download affordance + size clamp. Done on
+      // the already-sanitized DOM rather than by splicing the raw string, so
+      // model output still can't inject anything.
+      const holder = document.createElement('div');
+      holder.innerHTML = clean;
+      holder.querySelectorAll('img').forEach(img => {
+        img.classList.add('chat-image');
+        img.setAttribute('title', 'Click to download');
+        img.setAttribute('loading', 'lazy');
+      });
+      return holder.innerHTML;
+    },
+
+    // ── Chat scroll / image helpers ──
+    scrollChatToBottom(force) {
+      const c = document.getElementById('chat-container');
+      if (!c) return;
+      if (!force && !this.pg.stickToBottom) return;
+      c.scrollTop = c.scrollHeight;
+    },
+
+    onChatScroll() {
+      const c = document.getElementById('chat-container');
+      if (!c) return;
+      // Anything within ~80px of the bottom counts as "following along".
+      // Scrolling up to re-read shouldn't yank you back down every token.
+      this.pg.stickToBottom = (c.scrollHeight - c.scrollTop - c.clientHeight) < 80;
+    },
+
+    onChatClick(e) {
+      const img = e.target && e.target.closest ? e.target.closest('img') : null;
+      if (img && img.src) this.downloadImage(img.src);
+    },
+
+    async downloadImage(src) {
+      try {
+        let href = src, revoke = false;
+        if (!src.startsWith('data:')) {
+          // Remote images need to become a blob before the download
+          // attribute is honoured cross-origin.
+          const resp = await fetch(src, { mode: 'cors' });
+          href = URL.createObjectURL(await resp.blob());
+          revoke = true;
+        }
+        const a = document.createElement('a');
+        a.href = href;
+        a.download = `image-${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        if (revoke) setTimeout(() => URL.revokeObjectURL(href), 2000);
+        this.toast('Image downloaded', 'success');
+      } catch {
+        // CORS blocks the blob path on some hosts -- fall back to opening it
+        // so the image is at least reachable via the browser's own save.
+        window.open(src, '_blank', 'noopener');
+        this.toast('Opened image in a new tab', 'success');
+      }
     },
 
     // ── Playground model picker ──
@@ -1985,12 +2143,9 @@ function dashboard() {
                 }).filter(Boolean).join('\n\n');
               }
             } catch {}
-            return { role: m.role, content: txt };
+            return { role: m.role, content: txt, html: this.renderMarkdown(txt) };
           });
-          this.$nextTick(() => {
-            const c = document.getElementById('chat-container');
-            if (c) c.scrollTop = c.scrollHeight;
-          });
+          this.$nextTick(() => this.scrollChatToBottom(true));
         }
       } catch {}
     },
@@ -2076,13 +2231,11 @@ function dashboard() {
 
       this.pg.input = '';
       this.pg.attachedFile = null;
-      this.pg.messages.push({ role: 'user', content: displayContent });
+      this.pg.messages.push({ role: 'user', content: displayContent, html: this.renderMarkdown(displayContent) });
       this.pg.loading = true;
+      this.pg.stickToBottom = true;
 
-      this.$nextTick(() => {
-        const c = document.getElementById('chat-container');
-        if (c) c.scrollTop = c.scrollHeight;
-      });
+      this.$nextTick(() => this.scrollChatToBottom(true));
 
       let pushedAssistant = false;
       let gotContent = false;
@@ -2110,11 +2263,30 @@ function dashboard() {
           } catch {}
           streamError = detail;
         } else {
-          this.pg.messages.push({ role: 'assistant', content: '' });
+          this.pg.messages.push({ role: 'assistant', content: '', html: '' });
           pushedAssistant = true;
+          const msgIndex = this.pg.messages.length - 1;
           const reader = r.body.getReader();
           const decoder = new TextDecoder();
           let buffer = '';
+          let pending = '';
+          let lastFlush = 0;
+
+          // Applying every token straight to the Alpine model re-rendered the
+          // whole transcript and re-parsed markdown per token, which is what
+          // made long replies stutter. Batch the deltas to ~15fps instead.
+          const flush = (force) => {
+            if (!pending && !force) return;
+            const now = performance.now();
+            if (!force && now - lastFlush < 65) return;
+            lastFlush = now;
+            const msg = this.pg.messages[msgIndex];
+            if (!msg) return;
+            msg.content += pending;
+            pending = '';
+            msg.html = this.renderMarkdown(msg.content);
+            this.$nextTick(() => this.scrollChatToBottom());
+          };
 
           while (true) {
             const { done, value } = await reader.read();
@@ -2124,23 +2296,33 @@ function dashboard() {
             buffer = lines.pop();
             for (const line of lines) {
               const trimmed = line.trim();
-              if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
-                try {
-                  const d = JSON.parse(trimmed.slice(6));
-                  if (d.error) { streamError = d.error.message || 'Upstream error'; continue; }
-                  const content = (d.choices?.[0]?.delta?.content) || (d.type === 'content_block_delta' && d.delta?.text) || null;
-                  if (content) {
-                    gotContent = true;
-                    this.pg.messages[this.pg.messages.length - 1].content += content;
-                    this.$nextTick(() => {
-                      const c = document.getElementById('chat-container');
-                      if (c) c.scrollTop = c.scrollHeight;
-                    });
-                  }
-                } catch {}
-              }
+              if (!trimmed.startsWith('data: ') || trimmed === 'data: [DONE]') continue;
+              try {
+                const d = JSON.parse(trimmed.slice(6));
+                if (d.error) { streamError = d.error.message || 'Upstream error'; continue; }
+
+                // Image-generating models answer with an image content block
+                // rather than text deltas; without this they streamed as an
+                // empty reply.
+                if (d.type === 'content_block_start' && d.content_block?.type === 'image') {
+                  const s = d.content_block.source || {};
+                  const url = s.type === 'url'
+                    ? s.url
+                    : (s.data ? `data:${s.media_type || 'image/png'};base64,${s.data}` : null);
+                  if (url) { pending += `\n\n![generated image](${url})\n\n`; gotContent = true; flush(true); }
+                  continue;
+                }
+
+                const content = (d.choices?.[0]?.delta?.content) || (d.type === 'content_block_delta' && d.delta?.text) || null;
+                if (content) {
+                  gotContent = true;
+                  pending += content;
+                  flush(false);
+                }
+              } catch {}
             }
           }
+          flush(true);
 
           this.fetchSessions();
         }
@@ -2162,51 +2344,139 @@ function dashboard() {
     },
 
     // ── Routing ──
-    destroyLines() {
-      this.lines.forEach(l => { if (l && typeof l.remove === 'function') l.remove(); });
-      this.lines = [];
+    // -- Routing --
+    // Palette used when a provider has no fixed brand colour (custom
+    // providers are added at runtime, so we can't hardcode every one).
+    ACCENTS: [
+      'bg-orange-500/10 text-orange-400 border-orange-500/20',
+      'bg-sky-500/10 text-sky-400 border-sky-500/20',
+      'bg-violet-500/10 text-violet-400 border-violet-500/20',
+      'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+      'bg-rose-500/10 text-rose-400 border-rose-500/20',
+      'bg-purple-500/10 text-purple-400 border-purple-500/20',
+      'bg-green-500/10 text-green-400 border-green-500/20',
+      'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
+      'bg-amber-500/10 text-amber-400 border-amber-500/20',
+    ],
+    FIXED_ACCENTS: {
+      kc: 0, cv: 1, bm: 2, nry: 3, dahl: 4, qc: 5, marketku: 6, atomesus: 7, weize: 8,
+    },
+    providerAccent(prefix) {
+      if (prefix in this.FIXED_ACCENTS) return this.ACCENTS[this.FIXED_ACCENTS[prefix]];
+      let h = 0;
+      for (let i = 0; i < prefix.length; i++) h = (h * 31 + prefix.charCodeAt(i)) >>> 0;
+      return this.ACCENTS[h % this.ACCENTS.length];
     },
 
-    drawRoutingLines() {
-      this.destroyLines();
-      if (!window.LeaderLine) return;
+    compactNumber(n) {
+      n = Number(n) || 0;
+      if (n >= 1e9) return (n / 1e9).toFixed(1).replace(/\.0$/, '') + 'B';
+      if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+      if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+      return String(n);
+    },
 
-      this.providers.forEach(prov => {
-        const outlet = document.getElementById(`outlet-prov-${prov.id}`);
-        if (!outlet) return;
+    timeAgo(iso) {
+      if (!iso) return '-';
+      const then = new Date(iso).getTime();
+      if (Number.isNaN(then)) return '-';
+      const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
+      if (secs < 60) return secs + 's ago';
+      if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+      if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
+      return Math.floor(secs / 86400) + 'd ago';
+    },
 
-        const isTargetProv = (k) => {
-          if (prov.id === 'kc'  && !k.is_cv && !k.is_bm && !k.is_nr && !k.is_dahl && !k.is_qc && !k.is_marketku && !k.is_atomesus && !k.is_weize) return true;
-          if (prov.id === 'cv'  && k.is_cv) return true;
-          if (prov.id === 'bm'  && k.is_bm) return true;
-          if (prov.id === 'nry' && k.is_nr) return true;
-          if (prov.id === 'dahl' && k.is_dahl) return true;
-          if (prov.id === 'qc'  && k.is_qc) return true;
-          if (prov.id === 'marketku' && k.is_marketku) return true;
-          if (prov.id === 'atomesus' && k.is_atomesus) return true;
-          if (prov.id === 'weize' && k.is_weize) return true;
-          return false;
+    async fetchRoutingStats() {
+      this.routing.loading = true;
+      try {
+        const r = await fetch('/api/routing/stats?range=' + encodeURIComponent(this.routing.range));
+        if (!r.ok) { if (r.status === 401) window.location = '/login'; return; }
+        const d = await r.json();
+        this.routing.totals = d.totals || this.routing.totals;
+        this.routing.providers = d.providers || [];
+        this.routing.recent = d.recent || [];
+        this.routing.loaded = true;
+        this.$nextTick(() => lucide.createIcons());
+      } catch { this.toast('Failed to load routing stats', 'error'); }
+      finally { this.routing.loading = false; }
+    },
+
+    setRoutingRange(r) {
+      if (this.routing.range === r) return;
+      this.routing.range = r;
+      this.fetchRoutingStats();
+    },
+
+    // Live requests arrive one SSE event at a time; refetching per event would
+    // hammer the stats query, so coalesce a burst into one refresh.
+    scheduleRoutingRefresh() {
+      if (this._routingRefreshTimer) return;
+      this._routingRefreshTimer = setTimeout(() => {
+        this._routingRefreshTimer = null;
+        if (this.activeTab === 'routing') this.fetchRoutingStats();
+      }, 2500);
+    },
+
+    pulseProvider(prefix) {
+      if (!prefix) return;
+      this.routing.activePulse[prefix] = Date.now();
+      // Re-render once the glow should have expired, otherwise the node
+      // stays lit until some other reactive change happens to repaint it.
+      setTimeout(() => {
+        this.routing.activePulse = { ...this.routing.activePulse };
+      }, 3200);
+    },
+
+    isProviderPulsing(prefix) {
+      const at = this.routing.activePulse[prefix];
+      return !!at && (Date.now() - at) < 3000;
+    },
+
+    anyProviderPulsing() {
+      return Object.keys(this.routing.activePulse).some(p => this.isProviderPulsing(p));
+    },
+
+    routingCards() {
+      const t = this.routing.totals;
+      return [
+        { label: 'Total Requests', icon: 'activity',   value: this.formatNumber(t.requests), sub: t.errors ? `${t.errors} errors` : 'no errors', tone: 'text-foreground' },
+        { label: 'Input Tokens',   icon: 'arrow-up',   value: this.compactNumber(t.input_tokens),  sub: 'sent to providers', tone: 'text-primary' },
+        { label: 'Cached Tokens',  icon: 'zap',        value: this.compactNumber(t.cached_tokens), sub: 'prompt cache hits', tone: 'text-sky-400' },
+        { label: 'Output Tokens',  icon: 'arrow-down', value: this.compactNumber(t.output_tokens), sub: 'generated', tone: 'text-accent' },
+        { label: 'Avg Latency',    icon: 'clock',      value: (t.avg_latency_ms / 1000).toFixed(1) + 's', sub: 'per request', tone: 'text-foreground' },
+      ];
+    },
+
+    // Connector lines, hub -> each provider. Every interpolated value here is
+    // a number or a fixed literal, so there's nothing to escape.
+    connectorMarkup() {
+      return this.routingNodes().map(n => {
+        const x = n.x.toFixed(2), y = n.y.toFixed(2);
+        const stroke = n.hasTraffic ? 'hsl(var(--primary))' : 'hsl(var(--border))';
+        const base = `<line x1="50" y1="50" x2="${x}" y2="${y}" vector-effect="non-scaling-stroke" stroke-width="1.5" stroke-linecap="round" stroke="${stroke}" opacity="${n.hasTraffic ? 0.35 : 0.55}"/>`;
+        const live = n.live
+          ? `<line x1="50" y1="50" x2="${x}" y2="${y}" vector-effect="non-scaling-stroke" stroke-width="2" stroke-linecap="round" stroke="hsl(var(--primary))" class="connector-live"/>`
+          : '';
+        return base + live;
+      }).join('');
+    },
+
+    // Lays the providers out on an ellipse around the hub. Returns percentage
+    // coordinates so the SVG connectors and the HTML node cards agree.
+    routingNodes() {
+      const list = this.routing.providers;
+      const n = list.length || 1;
+      return list.map((p, i) => {
+        const angle = (i / n) * 2 * Math.PI - Math.PI / 2;
+        return {
+          ...p,
+          x: 50 + 34 * Math.cos(angle),
+          y: 50 + 33 * Math.sin(angle),
+          accent: this.providerAccent(p.prefix),
+          hasTraffic: p.requests > 0,
+          live: this.isProviderPulsing(p.prefix),
         };
-
-        const activeKey = this.keys.find(k => k.status === 'Active' && isTargetProv(k));
-        if (activeKey) {
-          const inlet = document.getElementById(`inlet-key-${activeKey.prefix}`);
-          if (inlet) {
-            const color = prov.id === 'kc'  ? '#f97316' :
-                          prov.id === 'cv'  ? '#38bdf8' :
-                          prov.id === 'bm'  ? '#a78bfa' :
-                          prov.id === 'nry' ? '#34d399' :
-                          prov.id === 'dahl' ? '#fb7185' :
-                          prov.id === 'marketku' ? '#4ade80' :
-                          prov.id === 'atomesus' ? '#67e8f9' :
-                          prov.id === 'weize' ? '#f59e0b' : '#a855f7';
-            this.lines.push(new LeaderLine(outlet, inlet, {
-              color, size: 2, path: 'fluid',
-              startSocket: 'right', endSocket: 'left',
-              dash: { animation: true }
-            }));
-          }
-        }
       });
     },
 
@@ -2221,7 +2491,6 @@ function dashboard() {
         if (d.success) {
           this.toast('Key set to Active', 'success');
           await this.fetchStatus();
-          setTimeout(() => this.drawRoutingLines(), 100);
         } else {
           this.toast(d.message || 'Failed to update key', 'error');
         }
@@ -2230,7 +2499,6 @@ function dashboard() {
   };
 }
 </script>
-<script src="https://cdn.jsdelivr.net/npm/leader-line-new@1.1.9/leader-line.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
 {% endblock %}

@@ -48,7 +48,8 @@ async def _build_status_dict():
         "available_keys": available_keys,
         "total_keys": len(_all_keys),
         "keys": _all_keys,
-        "recent_requests": recent_requests
+        "recent_requests": recent_requests,
+        "providers_signature": config_module.providers_signature(),
     }
 
 
@@ -121,6 +122,31 @@ async def _save_brain_exchange(
         content=assistant_text,
         model=model,
     )
+
+
+async def _broadcast_request_log():
+    """Push the just-recorded request to connected dashboards (live log + the
+    routing graph's connector animation)."""
+    try:
+        await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
+    except Exception:
+        pass
+
+
+def _extract_cached_tokens(openai_resp: dict) -> int:
+    """
+    Pull prompt-cache hits out of an OpenAI-shaped usage block.
+
+    Providers disagree on where this lives: OpenAI nests it under
+    prompt_tokens_details, others put cached_tokens at the usage root.
+    Check both and fall back to 0 rather than guessing.
+    """
+    usage = (openai_resp or {}).get("usage") or {}
+    details = usage.get("prompt_tokens_details") or {}
+    for candidate in (details.get("cached_tokens"), usage.get("cached_tokens")):
+        if isinstance(candidate, (int, float)):
+            return int(candidate)
+    return 0
 
 
 async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool):
@@ -396,13 +422,21 @@ async def messages(request: Request):
             start_req_time = time.time()
             kind, status, body = await _dispatch_custom_provider(cprefix, payload, want_stream)
             log_model = f"{cprefix}/{payload['model']}"
+            elapsed_ms = int((time.time() - start_req_time) * 1000)
             if kind == "stream":
                 async def _wrapped():
                     async for chunk in body:
                         yield chunk
-                add_request_log(log_model, status, "custom", False, int((time.time() - start_req_time) * 1000))
+                add_request_log(log_model, status, "custom", False, elapsed_ms, provider=cprefix)
+                await _broadcast_request_log()
                 return StreamingResponse(_wrapped(), media_type="text/event-stream")
-            add_request_log(log_model, status, "custom", False, int((time.time() - start_req_time) * 1000))
+            usage = (body or {}).get("usage") or {}
+            add_request_log(
+                log_model, status, "custom", False, elapsed_ms,
+                usage.get("input_tokens", 0) or 0, usage.get("output_tokens", 0) or 0,
+                provider=cprefix,
+            )
+            await _broadcast_request_log()
             return JSONResponse(status_code=status, content=body)
 
     # Brain: Always enabled for all users
@@ -1090,8 +1124,9 @@ async def messages(request: Request):
                 anthropic_resp = to_anthropic_response(openai_resp, log_model, msg_id)
                 usage = anthropic_resp.get("usage", {})
                 output_tokens = usage.get("output_tokens", 0)
+                cached_tokens = _extract_cached_tokens(openai_resp)
                 total_ms = int((time.time() - start_req_time) * 1000)
-                add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, output_tokens)
+                add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, output_tokens, cached_tokens)
 
                 if enable_brain and user_message_text:
                     await _save_brain_exchange(
@@ -1290,7 +1325,13 @@ async def chat_completions(request: Request):
             start_req_time = time.time()
             kind, status, body = await _dispatch_custom_provider(cprefix, anthropic_payload, want_stream)
             log_model = f"{cprefix}/{model_name}"
-            add_request_log(log_model, status, "custom", False, int((time.time() - start_req_time) * 1000))
+            usage = (body or {}).get("usage") or {} if kind == "json" else {}
+            add_request_log(
+                log_model, status, "custom", False, int((time.time() - start_req_time) * 1000),
+                usage.get("input_tokens", 0) or 0, usage.get("output_tokens", 0) or 0,
+                provider=cprefix,
+            )
+            await _broadcast_request_log()
 
             if status != 200:
                 return JSONResponse(status_code=status, content=body)

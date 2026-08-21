@@ -62,8 +62,48 @@ async def setup_tables():
             latency_ms INTEGER,
             input_tokens INTEGER DEFAULT 0,
             output_tokens INTEGER DEFAULT 0,
+            cached_tokens INTEGER DEFAULT 0,
+            provider VARCHAR(20),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )
+    """)
+    await execute("""
+        ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS cached_tokens INTEGER DEFAULT 0
+    """)
+    await execute("""
+        ALTER TABLE request_logs ADD COLUMN IF NOT EXISTS provider VARCHAR(20)
+    """)
+    # Backfill provider from the model prefix for rows written before the
+    # column existed, so the routing stats view isn't blind to history.
+    # Four providers use a model prefix that differs from their provider key
+    # (dh/->dahl, mk/->marketku, at/->atomesus, wz/->weize); a raw split_part
+    # would file their history under a provider that doesn't exist.
+    await execute("""
+        UPDATE request_logs
+        SET provider = CASE split_part(model, '/', 1)
+            WHEN 'dh' THEN 'dahl'
+            WHEN 'mk' THEN 'marketku'
+            WHEN 'at' THEN 'atomesus'
+            WHEN 'wz' THEN 'weize'
+            ELSE split_part(model, '/', 1)
+        END
+        WHERE provider IS NULL AND model LIKE '%/%'
+    """)
+    # Repair rows written by the first version of the backfill above, which
+    # stored the bare model prefix.
+    await execute("""
+        UPDATE request_logs
+        SET provider = CASE provider
+            WHEN 'dh' THEN 'dahl'
+            WHEN 'mk' THEN 'marketku'
+            WHEN 'at' THEN 'atomesus'
+            WHEN 'wz' THEN 'weize'
+        END
+        WHERE provider IN ('dh', 'mk', 'at', 'wz')
+    """)
+    await execute("""
+        CREATE INDEX IF NOT EXISTS idx_logs_provider_created
+        ON request_logs(provider, created_at DESC)
     """)
     await execute("""
         CREATE TABLE IF NOT EXISTS server_config (

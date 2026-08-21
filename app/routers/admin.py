@@ -69,7 +69,11 @@ async def _build_status_dict():
         "available_keys": available_keys,
         "total_keys": len(_all_keys),
         "keys": _all_keys,
-        "recent_requests": recent_requests
+        "recent_requests": recent_requests,
+        # Lets the dashboard notice a provider/model catalog change and
+        # refetch. This is the copy that matters most: every add/remove
+        # provider and add/remove key endpoint broadcasts through here.
+        "providers_signature": config_module.providers_signature(),
     }
 
 
@@ -622,6 +626,127 @@ async def api_brain_session_messages(session_id: int, user: None = Depends(requi
         "session_id": session_id,
         "messages": [_json_safe_row(row) for row in messages],
         "count": len(messages)
+    }
+
+
+_ROUTING_RANGES = {"today": None, "24h": 1, "7d": 7, "30d": 30, "60d": 60}
+
+
+@router.get("/api/routing/stats")
+async def routing_stats_endpoint(range: str = Query("today"), user: None = Depends(require_auth)):
+    """Traffic totals + per-provider breakdown for the routing view."""
+    import datetime
+
+    if range not in _ROUTING_RANGES:
+        return JSONResponse(status_code=400, content={"error": f"range must be one of {list(_ROUTING_RANGES)}"})
+
+    # The rest of the app reports timestamps in UTC+7, so "today" means
+    # midnight local, not midnight UTC.
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if range == "today":
+        local = now.astimezone(datetime.timezone(datetime.timedelta(hours=7)))
+        cutoff = local.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(datetime.timezone.utc)
+    else:
+        cutoff = now - datetime.timedelta(days=_ROUTING_RANGES[range])
+
+    totals_row = await fetch_one("""
+        SELECT
+            COUNT(*)                            AS requests,
+            COALESCE(SUM(input_tokens), 0)      AS input_tokens,
+            COALESCE(SUM(output_tokens), 0)     AS output_tokens,
+            COALESCE(SUM(cached_tokens), 0)     AS cached_tokens,
+            COALESCE(AVG(latency_ms), 0)        AS avg_latency_ms,
+            COUNT(*) FILTER (WHERE status_code >= 400) AS errors
+        FROM request_logs
+        WHERE created_at >= $1
+    """, cutoff)
+
+    per_provider = await fetch("""
+        SELECT
+            COALESCE(provider, CASE split_part(model, '/', 1)
+                WHEN 'dh' THEN 'dahl' WHEN 'mk' THEN 'marketku'
+                WHEN 'at' THEN 'atomesus' WHEN 'wz' THEN 'weize'
+                ELSE split_part(model, '/', 1) END) AS provider,
+            COUNT(*)                        AS requests,
+            COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+            COALESCE(SUM(output_tokens), 0) AS output_tokens,
+            COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+            COALESCE(AVG(latency_ms), 0)    AS avg_latency_ms,
+            COUNT(*) FILTER (WHERE status_code >= 400) AS errors,
+            MAX(created_at)                 AS last_used_at
+        FROM request_logs
+        WHERE created_at >= $1
+        GROUP BY 1
+    """, cutoff)
+    stats_by_provider = {r["provider"]: r for r in per_provider if r["provider"]}
+
+    key_counts: dict[str, int] = {}
+    for k in get_masked_keys():
+        key_counts[k["provider"]] = key_counts.get(k["provider"], 0) + 1
+
+    providers = []
+    for prefix in sorted(config_module.BUILTIN_PROVIDER_PREFIXES):
+        if prefix in config_module.DISABLED_PROVIDERS:
+            continue
+        providers.append((prefix, config_module.BUILTIN_PROVIDER_NAMES[prefix], config_module.BUILTIN_PROVIDER_BASE_URLS[prefix]))
+    for prefix, info in config_module.CUSTOM_PROVIDERS.items():
+        providers.append((prefix, info["name"], info["base_url"]))
+
+    provider_rows = []
+    for prefix, name, base_url in providers:
+        s = stats_by_provider.get(prefix)
+        last_used = s["last_used_at"] if s and s["last_used_at"] else None
+        provider_rows.append({
+            "prefix": prefix,
+            "name": name,
+            "base_url": base_url,
+            "key_count": key_counts.get(prefix, 0),
+            "requests": int(s["requests"]) if s else 0,
+            "input_tokens": int(s["input_tokens"]) if s else 0,
+            "output_tokens": int(s["output_tokens"]) if s else 0,
+            "cached_tokens": int(s["cached_tokens"]) if s else 0,
+            "avg_latency_ms": int(s["avg_latency_ms"]) if s else 0,
+            "errors": int(s["errors"]) if s else 0,
+            "last_used_at": last_used.isoformat() if last_used else None,
+        })
+
+    recent = await fetch("""
+        SELECT model, status_code, input_tokens, output_tokens, cached_tokens, latency_ms,
+               COALESCE(provider, CASE split_part(model, '/', 1)
+                WHEN 'dh' THEN 'dahl' WHEN 'mk' THEN 'marketku'
+                WHEN 'at' THEN 'atomesus' WHEN 'wz' THEN 'weize'
+                ELSE split_part(model, '/', 1) END) AS provider, created_at
+        FROM request_logs
+        WHERE created_at >= $1
+        ORDER BY created_at DESC
+        LIMIT 25
+    """, cutoff)
+
+    return {
+        "range": range,
+        "since": cutoff.isoformat(),
+        "totals": {
+            "requests": int(totals_row["requests"]),
+            "input_tokens": int(totals_row["input_tokens"]),
+            "output_tokens": int(totals_row["output_tokens"]),
+            "cached_tokens": int(totals_row["cached_tokens"]),
+            "avg_latency_ms": int(totals_row["avg_latency_ms"]),
+            "errors": int(totals_row["errors"]),
+        },
+        "providers": provider_rows,
+        "recent": [
+            {
+                "model": r["model"],
+                "status_code": r["status_code"],
+                "provider": r["provider"],
+                "input_tokens": r["input_tokens"] or 0,
+                "output_tokens": r["output_tokens"] or 0,
+                "cached_tokens": r["cached_tokens"] or 0,
+                "latency_ms": r["latency_ms"] or 0,
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+            }
+            for r in recent
+        ],
     }
 
 

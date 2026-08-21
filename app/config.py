@@ -514,7 +514,7 @@ async def init_state_from_db():
         )
 
     # Recent requests from DB (last 20)
-    logs = await db_fetch("SELECT model, status_code, key_prefix, rotated, latency_ms, created_at FROM request_logs ORDER BY created_at DESC LIMIT 20")
+    logs = await db_fetch("SELECT model, status_code, key_prefix, rotated, latency_ms, input_tokens, output_tokens, cached_tokens, provider, created_at FROM request_logs ORDER BY created_at DESC LIMIT 20")
     recent_requests.clear()
     for r in logs:
         ts = r["created_at"]
@@ -532,7 +532,11 @@ async def init_state_from_db():
             "status_code": r["status_code"],
             "key_used": r["key_prefix"],
             "rotated": r["rotated"],
-            "latency_ms": r["latency_ms"]
+            "latency_ms": r["latency_ms"],
+            "provider": r["provider"] or provider_from_model(r["model"]),
+            "input_tokens": r["input_tokens"] or 0,
+            "output_tokens": r["output_tokens"] or 0,
+            "cached_tokens": r["cached_tokens"] or 0,
         })
 
     # Clean slate on startup — reset any previously Limited/Slow keys to Standby
@@ -969,27 +973,70 @@ async def remove_provider(prefix: str):
     return True, "Provider removed"
 
 
-def add_request_log(model, status_code, key_used, rotated, latency_ms, input_tokens: int = 0, output_tokens: int = 0):
+# Model-name prefix -> provider key. Only where they differ from the provider
+# key itself; everything else falls through unchanged.
+_MODEL_PREFIX_TO_PROVIDER = {"dh": "dahl", "mk": "marketku", "at": "atomesus", "wz": "weize"}
+
+
+def provider_from_model(model: str) -> str:
+    """Derive the provider key from a prefixed model name (e.g. dh/foo -> dahl)."""
+    if not model or "/" not in model:
+        return "kc"
+    prefix = model.split("/", 1)[0]
+    return _MODEL_PREFIX_TO_PROVIDER.get(prefix, prefix)
+
+
+def providers_signature() -> str:
+    """
+    Cheap fingerprint of which providers and how many models exist right now.
+
+    The dashboard compares this between status broadcasts so it knows to
+    refetch its model list when a provider is added/removed or a catalog is
+    refreshed -- previously the model picker stayed stale until a manual
+    page reload.
+    """
+    builtin_models = {
+        "kc": KIMCHI_MODELS, "cv": CAVOTI_MODELS, "bm": BLUESMINDS_MODELS,
+        "nry": NARA_MODELS, "dahl": DAHL_MODELS_SHORT, "qc": QWEN_CLOUD_MODELS,
+        "marketku": MARKETKU_MODELS, "atomesus": ATOMESUS_MODELS, "weize": WEIZE_MODELS,
+    }
+    parts = []
+    for prefix in sorted(BUILTIN_PROVIDER_PREFIXES):
+        if prefix in DISABLED_PROVIDERS:
+            continue
+        parts.append(f"{prefix}:{len(builtin_models.get(prefix) or [])}")
+    for prefix, info in sorted(CUSTOM_PROVIDERS.items()):
+        parts.append(f"{prefix}:{len(info.get('models') or [])}")
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()[:16]
+
+
+def add_request_log(model, status_code, key_used, rotated, latency_ms, input_tokens: int = 0, output_tokens: int = 0, cached_tokens: int = 0, provider: str = None):
     global total_requests, total_tokens
     total_requests += 1
     total_tokens += (input_tokens + output_tokens)
     import datetime
     timestamp = (datetime.datetime.utcnow() + datetime.timedelta(hours=7)).strftime("%H:%M:%S")
+    if provider is None:
+        provider = provider_from_model(model)
     log_item = {
         "timestamp": timestamp,
         "model": model,
         "status_code": status_code,
         "key_used": key_used[:15] + "...",
         "rotated": rotated,
-        "latency_ms": latency_ms
+        "latency_ms": latency_ms,
+        "provider": provider,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_tokens": cached_tokens,
     }
     recent_requests.insert(0, log_item)
     if len(recent_requests) > 20:
         recent_requests.pop()
     # Persist to DB
     _bg(db_execute(
-        "INSERT INTO request_logs (model, status_code, key_prefix, rotated, latency_ms, input_tokens, output_tokens) VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        model, status_code, log_item["key_used"], rotated, latency_ms, input_tokens, output_tokens
+        "INSERT INTO request_logs (model, status_code, key_prefix, rotated, latency_ms, input_tokens, output_tokens, cached_tokens, provider) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        model, status_code, log_item["key_used"], rotated, latency_ms, input_tokens, output_tokens, cached_tokens, provider
     ))
     _bg(db_execute(
         "INSERT INTO server_config (key, value) VALUES ('total_requests', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
