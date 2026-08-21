@@ -110,6 +110,57 @@ def _model_allowed_for_key(request: Request, model: str):
     )
 
 
+def _key_model_prompt(request: Request, model: str) -> str:
+    """
+    The per-model system prompt configured on the router key making this
+    request, if any. Scoped to that key -- the same model called with a
+    different key, or with the router password, gets nothing.
+    """
+    key_row = _router_key(request)
+    if not key_row:
+        return ""
+    raw = key_row.get("model_prompts")
+    if not raw:
+        return ""
+    try:
+        prompts = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return ""
+    if not isinstance(prompts, dict):
+        return ""
+    return str(prompts.get(model) or "").strip()
+
+
+def _inject_anthropic_system(payload: dict, prompt: str):
+    """Prepend a system prompt to an Anthropic-shaped payload in place."""
+    if not prompt:
+        return
+    existing = payload.get("system")
+    if isinstance(existing, list):
+        payload["system"] = [{"type": "text", "text": prompt}] + existing
+    elif isinstance(existing, str) and existing.strip():
+        payload["system"] = f"{prompt}\n\n{existing}"
+    else:
+        payload["system"] = prompt
+
+
+def _inject_openai_system(payload: dict, prompt: str):
+    """Prepend a system prompt to an OpenAI-shaped payload in place."""
+    if not prompt:
+        return
+    messages = list(payload.get("messages") or [])
+    idx = next((i for i, m in enumerate(messages) if m.get("role") == "system"), None)
+    if idx is None:
+        messages.insert(0, {"role": "system", "content": prompt})
+    else:
+        existing = messages[idx].get("content")
+        if isinstance(existing, str) and existing.strip():
+            messages[idx] = {**messages[idx], "content": f"{prompt}\n\n{existing}"}
+        else:
+            messages[idx] = {**messages[idx], "content": prompt}
+    payload["messages"] = messages
+
+
 async def _bill_router_key(request: Request, tokens: int):
     """Charge a request's tokens against the router key that made it."""
     key_row = _router_key(request)
@@ -460,6 +511,10 @@ async def messages(request: Request):
     denied = _model_allowed_for_key(request, requested_model_raw)
     if denied:
         return JSONResponse(status_code=403, content={"error": {"message": denied}})
+
+    # Applied here, before provider dispatch, so it reaches built-in and
+    # custom providers alike.
+    _inject_anthropic_system(payload, _key_model_prompt(request, requested_model_raw))
 
     for cprefix in config_module.CUSTOM_PROVIDERS:
         if requested_model_raw.startswith(f"{cprefix}/"):
@@ -1363,6 +1418,8 @@ async def chat_completions(request: Request):
     denied = _model_allowed_for_key(request, requested_model)
     if denied:
         return JSONResponse(status_code=403, content={"error": {"message": denied}})
+
+    _inject_openai_system(payload, _key_model_prompt(request, requested_model))
 
     for cprefix in config_module.CUSTOM_PROVIDERS:
         if requested_model.startswith(f"{cprefix}/"):

@@ -1447,6 +1447,30 @@
           <p class="text-[10px] text-muted-foreground/70">Leave empty to allow every model.</p>
         </div>
 
+        <!-- Per-model system prompt, only for the models this key allows -->
+        <div x-show="routerKeys.selectedModels.length" class="space-y-2">
+          <div class="flex items-center justify-between gap-2">
+            <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">System Prompt Per Model</label>
+            <span class="text-[10px] text-muted-foreground font-mono" x-text="`${promptCount()} set`"></span>
+          </div>
+          <p class="text-[10px] text-muted-foreground/70">Prepended to the system prompt for requests using this key only. Other keys calling the same model are unaffected.</p>
+          <div class="space-y-2 max-h-56 overflow-y-auto pr-1">
+            <template x-for="m in routerKeys.selectedModels" :key="'p-'+m">
+              <div class="bg-secondary/40 border border-border rounded-xl p-2.5 space-y-1.5">
+                <div class="flex items-center justify-between gap-2">
+                  <span class="font-mono text-[11px] text-foreground truncate" x-text="m"></span>
+                  <button type="button" x-show="routerKeys.modelPrompts[m]"
+                          @click="routerKeys.modelPrompts[m] = ''"
+                          class="text-[10px] text-muted-foreground hover:text-destructive transition-colors shrink-0">clear</button>
+                </div>
+                <textarea x-model="routerKeys.modelPrompts[m]" rows="2"
+                          placeholder="Optional — e.g. Always answer in rhyme."
+                          class="w-full bg-secondary border border-border rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground placeholder:text-muted-foreground/50 resize-y"></textarea>
+              </div>
+            </template>
+          </div>
+        </div>
+
         <button type="submit" :disabled="!routerKeys.newKeyName.trim() || routerKeys.generating"
                 class="w-full bg-primary text-primary-foreground font-600 px-4 py-2.5 rounded-xl text-sm hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
           <i data-lucide="key" class="w-4 h-4" x-show="!routerKeys.generating"></i>
@@ -1608,6 +1632,7 @@ function dashboard() {
         { value: 'custom',    label: 'Custom…' },
       ],
       selectedModels: [],
+      modelPrompts: {},
       expiryOptions: [
         { days: 0,   label: 'Never expires' },
         { days: 1,   label: '1 day' },
@@ -2123,12 +2148,28 @@ function dashboard() {
       return Number(p) || 0;
     },
 
+    // Only prompts for models that are still selected, and only non-empty
+    // ones -- deselecting a model shouldn't smuggle its prompt through.
+    activeModelPrompts() {
+      const out = {};
+      for (const m of this.routerKeys.selectedModels) {
+        const t = (this.routerKeys.modelPrompts[m] || '').trim();
+        if (t) out[m] = t;
+      }
+      return out;
+    },
+
+    promptCount() {
+      return Object.keys(this.activeModelPrompts()).length;
+    },
+
     openKeyForm() {
       this.routerKeys.newKeyName = '';
       this.routerKeys.expiresInDays = 0;
       this.routerKeys.quotaPreset = 'unlimited';
       this.routerKeys.tokenQuota = 100000;
       this.routerKeys.selectedModels = [];
+      this.routerKeys.modelPrompts = {};
       this.routerKeys.formOpen = true;
       this.$nextTick(() => lucide.createIcons());
     },
@@ -2191,6 +2232,7 @@ function dashboard() {
             expires_in_days: this.routerKeys.expiresInDays || 0,
             token_quota: this.resolvedQuota(),
             allowed_models: this.routerKeys.selectedModels,
+            model_prompts: this.activeModelPrompts(),
           })
         });
         if (!r.ok) throw new Error('Failed to generate key');
@@ -2204,6 +2246,7 @@ function dashboard() {
           this.routerKeys.quotaPreset = 'unlimited';
           this.routerKeys.tokenQuota = 100000;
           this.routerKeys.selectedModels = [];
+          this.routerKeys.modelPrompts = {};
           this.routerKeys.formOpen = false;
           this.toast('Router API key generated! Copy it now - it won\'t be shown again.', 'success');
           this.$nextTick(() => lucide.createIcons());

@@ -802,9 +802,26 @@ async def api_create_router_key(payload: dict = Body(...), user: None = Depends(
     models = payload.get("allowed_models") or []
     if not isinstance(models, list):
         return JSONResponse(status_code=400, content={"success": False, "message": "allowed_models must be a list"})
-    allowed_models = ",".join(sorted({str(m).strip() for m in models if str(m).strip()}))
+    allowed = sorted({str(m).strip() for m in models if str(m).strip()})
+    allowed_models = ",".join(allowed)
 
-    key = await create_router_api_key(key_name, expires_at, token_quota, allowed_models)
+    # Optional per-model system prompt, scoped to this key only.
+    prompts_in = payload.get("model_prompts") or {}
+    if not isinstance(prompts_in, dict):
+        return JSONResponse(status_code=400, content={"success": False, "message": "model_prompts must be an object"})
+    prompts = {}
+    for model, text in prompts_in.items():
+        text = str(text or "").strip()
+        if not text:
+            continue
+        if len(text) > 8000:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Prompt for '{model}' is too long (max 8000 characters)"})
+        # A prompt for a model the key can't call would silently never fire.
+        if allowed and str(model) not in allowed:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"'{model}' has a prompt but isn't in the allowed models"})
+        prompts[str(model)] = text
+
+    key = await create_router_api_key(key_name, expires_at, token_quota, allowed_models, json.dumps(prompts))
     return {"success": True, "key": _json_safe_row(key)}
 
 
