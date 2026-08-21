@@ -120,22 +120,14 @@
       --dot-hot: rgba(0, 0, 0, 0.6);
     }
 
-    /* Brighter copy of the same grid, revealed only around the cursor. */
-    .dot-layer::after {
-      content: '';
+    /* Dots near the cursor are redrawn larger on a canvas layered on top.
+       CSS can't scale individual gradient dots, so the swell has to be
+       painted per-dot rather than masked. */
+    #dot-canvas {
       position: absolute;
       inset: 0;
-      background-image: radial-gradient(var(--dot-hot) 1.5px, transparent 1.5px);
-      background-size: var(--dot-size) var(--dot-size);
-      -webkit-mask-image: radial-gradient(circle var(--spot) at var(--mx, -999px) var(--my, -999px), #000 0%, rgba(0,0,0,0.35) 45%, transparent 72%);
-      mask-image: radial-gradient(circle var(--spot) at var(--mx, -999px) var(--my, -999px), #000 0%, rgba(0,0,0,0.35) 45%, transparent 72%);
-      transition: opacity 0.3s ease;
-      opacity: 0;
-    }
-    .dot-layer.is-active::after { opacity: 1; }
-
-    @media (prefers-reduced-motion: reduce) {
-      .dot-layer::after { transition: none; }
+      width: 100%;
+      height: 100%;
     }
 
     /* Force readable body text in rendered markdown regardless of whether the
@@ -221,29 +213,108 @@
   {% block head %}{% endblock %}
 </head>
 <body class="bg-background text-foreground font-body antialiased">
-  <div class="dot-layer" id="dot-layer" aria-hidden="true"></div>
+  <div class="dot-layer" id="dot-layer" aria-hidden="true">
+    <canvas id="dot-canvas"></canvas>
+  </div>
   {% block content %}{% endblock %}
 
   <script>
-    // Feed the cursor position to the dot layer so the bright grid follows it.
-    // rAF-throttled: mousemove fires far more often than we can paint.
+    // Dot grid that swells toward the cursor.
+    //
+    // The static grid is the CSS background on .dot-layer. This canvas only
+    // repaints the dots inside the cursor's radius, drawing them larger and
+    // brighter -- so it's a few hundred arcs a frame, not the whole viewport.
     (function () {
       var layer = document.getElementById('dot-layer');
-      if (!layer) return;
-      var x = 0, y = 0, queued = false;
-      function paint() {
-        queued = false;
-        layer.style.setProperty('--mx', x + 'px');
-        layer.style.setProperty('--my', y + 'px');
+      var canvas = document.getElementById('dot-canvas');
+      if (!layer || !canvas || !canvas.getContext) return;
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+      var ctx = canvas.getContext('2d');
+      var SPACING = 26;      // must match --dot-size
+      var OFFSET = 13;       // gradient dots sit at the centre of each tile
+      var BASE_R = 1.3;      // matches the CSS dot radius
+      var MAX_R = 4.6;       // how big a dot gets right under the cursor
+      var SPOT = 175;        // influence radius
+
+      var w = 0, h = 0, dpr = 1;
+      var curX = -9999, curY = -9999;     // eased position actually drawn
+      var tgtX = -9999, tgtY = -9999;     // where the pointer really is
+      var raf = null;
+
+      function resize() {
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        w = window.innerWidth;
+        h = window.innerHeight;
+        canvas.width = Math.floor(w * dpr);
+        canvas.height = Math.floor(h * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        // Only ask for a frame if there's actually something to paint. Setting
+        // canvas.width already cleared it, and scheduling here before the
+        // pointer is known would leave `raf` pending in a backgrounded tab --
+        // which blocks every later schedule() until that frame finally lands.
+        if (curX > -1000) schedule();
       }
+
+      function dotRGB() {
+        return document.documentElement.classList.contains('dark') ? '255,255,255' : '0,0,0';
+      }
+
+      function draw() {
+        ctx.clearRect(0, 0, w, h);
+        if (curX < -1000) return;
+        var rgb = dotRGB();
+        var nMin = Math.floor((curX - SPOT - OFFSET) / SPACING);
+        var nMax = Math.ceil((curX + SPOT - OFFSET) / SPACING);
+        var mMin = Math.floor((curY - SPOT - OFFSET) / SPACING);
+        var mMax = Math.ceil((curY + SPOT - OFFSET) / SPACING);
+        for (var n = nMin; n <= nMax; n++) {
+          var x = OFFSET + n * SPACING;
+          if (x < -SPACING || x > w + SPACING) continue;
+          for (var m = mMin; m <= mMax; m++) {
+            var y = OFFSET + m * SPACING;
+            if (y < -SPACING || y > h + SPACING) continue;
+            var dx = x - curX, dy = y - curY;
+            var dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > SPOT) continue;
+            // squared falloff: the swell stays tight around the pointer
+            var t = 1 - dist / SPOT;
+            var ease = t * t;
+            ctx.beginPath();
+            ctx.arc(x, y, BASE_R + ease * (MAX_R - BASE_R), 0, 6.283185307179586);
+            ctx.fillStyle = 'rgba(' + rgb + ',' + (0.13 + ease * 0.72).toFixed(3) + ')';
+            ctx.fill();
+          }
+        }
+      }
+
+      function tick() {
+        raf = null;
+        // ease toward the pointer so the bulge trails rather than snapping
+        curX += (tgtX - curX) * 0.2;
+        curY += (tgtY - curY) * 0.2;
+        draw();
+        if (Math.abs(tgtX - curX) > 0.4 || Math.abs(tgtY - curY) > 0.4) schedule();
+      }
+
+      function schedule() {
+        if (raf === null) raf = requestAnimationFrame(tick);
+      }
+
       window.addEventListener('pointermove', function (e) {
-        x = e.clientX; y = e.clientY;
-        layer.classList.add('is-active');
-        if (!queued) { queued = true; requestAnimationFrame(paint); }
+        if (curX < -1000) { curX = e.clientX; curY = e.clientY; }  // no fly-in on first move
+        tgtX = e.clientX;
+        tgtY = e.clientY;
+        schedule();
       }, { passive: true });
-      window.addEventListener('pointerleave', function () {
-        layer.classList.remove('is-active');
+
+      document.addEventListener('pointerleave', function () {
+        tgtX = -9999; tgtY = -9999; curX = -9999; curY = -9999;
+        schedule();
       });
+
+      window.addEventListener('resize', resize, { passive: true });
+      resize();
     })();
   </script>
   <script>lucide.createIcons();</script>
