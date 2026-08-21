@@ -108,25 +108,25 @@
       inherits: false;
     }
 
-    /* Plus/cross grid + animated glowing spotlight */
+    /* Dot grid + animated glowing spotlight. Dots read lighter than the
+       old crossing-lines grid -- the lines drew the eye into the background
+       instead of leaving it as texture. */
     body, .grid-bg {
       background-image:
         radial-gradient(ellipse 85% 70% at var(--glow-x) var(--glow-y), rgba(232,112,64,0.28) 0%, rgba(232,112,64,0.08) 35%, transparent 70%),
-        linear-gradient(currentColor 1.2px, transparent 1.2px),
-        linear-gradient(90deg, currentColor 1.2px, transparent 1.2px);
-      background-size: auto, 52px 52px, 52px 52px;
-      background-position: 0 0, 26px 26px, 26px 26px;
-      color: rgba(255,255,255,0.32);
+        radial-gradient(currentColor 1.35px, transparent 1.35px);
+      background-size: auto, 26px 26px;
+      background-position: 0 0, 13px 13px;
+      color: rgba(255,255,255,0.14);
       animation: glow-drift 20s ease-in-out infinite;
     }
 
     html:not(.dark) body,
     html:not(.dark) .grid-bg {
-      color: rgba(0,0,0,0.20);
+      color: rgba(0,0,0,0.13);
       background-image:
         radial-gradient(ellipse 85% 70% at var(--glow-x) var(--glow-y), rgba(232,112,64,0.18) 0%, rgba(232,112,64,0.05) 35%, transparent 70%),
-        linear-gradient(currentColor 1.2px, transparent 1.2px),
-        linear-gradient(90deg, currentColor 1.2px, transparent 1.2px);
+        radial-gradient(currentColor 1.35px, transparent 1.35px);
     }
 
     @keyframes glow-drift {
