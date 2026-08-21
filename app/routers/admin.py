@@ -285,6 +285,15 @@ async def refresh_provider_models_endpoint(prefix: str, user: None = Depends(req
     return {"success": success, "message": msg}
 
 
+@router.put("/api/providers/{prefix}/models")
+async def set_provider_models_endpoint(prefix: str, payload: dict = Body(...), user: None = Depends(require_auth)):
+    models = payload.get("models") or []
+    if not isinstance(models, list):
+        return JSONResponse(status_code=400, content={"error": "models must be a list"})
+    success, msg = await config_module.set_custom_provider_models(prefix, models)
+    return {"success": success, "message": msg}
+
+
 @router.delete("/api/providers/{prefix}")
 async def remove_provider_endpoint(prefix: str, user: None = Depends(require_auth)):
     success, msg = await remove_provider(prefix)

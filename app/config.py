@@ -835,6 +835,24 @@ def rotate_custom_key(prefix: str, reason: str = "Limited"):
     return new_key
 
 
+async def set_custom_provider_models(prefix: str, models: list):
+    """
+    Manually pin a custom provider's model list, bypassing refresh_custom_provider_models.
+    Useful when the provider's own /models endpoint lists things the account
+    doesn't actually have entitlement to call (e.g. copilot-api advertises
+    every model in the Copilot catalog regardless of your plan).
+    """
+    from app.database import update_custom_provider_models
+
+    info = CUSTOM_PROVIDERS.get(prefix)
+    if not info:
+        return False, "Unknown provider"
+    cleaned = list(dict.fromkeys(m.strip() for m in models if m.strip()))
+    info["models"] = cleaned
+    await update_custom_provider_models(prefix, ",".join(cleaned))
+    return True, f"Set {len(cleaned)} models"
+
+
 async def refresh_custom_provider_models(prefix: str):
     """Fetch {base_url}/models with whatever key is currently active for this
     provider and cache the id list. Called right after a provider (with a
