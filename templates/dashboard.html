@@ -138,8 +138,18 @@
         <button @click="dark = !dark"
                 class="p-2 rounded hover:bg-secondary transition-colors text-muted-foreground"
                 title="Toggle theme">
-          <template x-if="dark"><i data-lucide="sun" class="w-4 h-4"></i></template>
-          <template x-if="!dark"><i data-lucide="moon" class="w-4 h-4"></i></template>
+          <!-- Inline SVG, not <i data-lucide> inside x-if: lucide *replaces*
+               the <i> with an <svg>, which leaves Alpine holding a reference
+               to a node that's no longer in the tree. On the next toggle it
+               fails to remove the old icon and inserts another, so they pile
+               up. Static SVGs toggled with x-show sidestep that entirely. -->
+          <svg x-show="dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/>
+          </svg>
+          <svg x-show="!dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="w-4 h-4">
+            <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>
+          </svg>
         </button>
         <div class="hidden sm:flex items-center gap-1.5 text-[11px] font-mono bg-secondary/80 border border-border rounded-full px-3 py-1.5 text-muted-foreground">
           <div class="w-1.5 h-1.5 rounded-full"
@@ -868,18 +878,67 @@
            x-transition:enter-start="opacity-0 translate-y-1"
            x-transition:enter-end="opacity-100 translate-y-0">
 
-        <div class="flex flex-col sm:flex-row gap-3 sm:items-center justify-between">
-          <div class="flex items-center gap-2">
-            <span class="text-[9px] font-600 text-muted-foreground/70 uppercase tracking-[0.14em] font-mono">Available Models</span>
-            <span class="text-[9px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-full border border-border font-mono"
-                  x-text="models.loading ? 'loading' : `${models.totalCount} models`">—</span>
+        <!-- Router endpoint: what clients actually point at -->
+        <div class="bg-card border border-border rounded-2xl p-4 sm:p-5">
+          <p class="text-[9px] font-600 text-muted-foreground uppercase tracking-[0.14em] font-mono mb-3">Router Endpoint</p>
+          <div class="grid sm:grid-cols-2 gap-3">
+            <template x-for="ep in routerEndpoints()" :key="ep.label">
+              <button @click="copyToClipboard(ep.url)"
+                      class="group flex items-center justify-between gap-3 px-3 py-2.5 bg-secondary/50 hover:bg-secondary border border-border rounded-xl text-left transition-colors">
+                <div class="min-w-0">
+                  <div class="text-[9px] font-600 text-muted-foreground uppercase tracking-[0.12em] font-mono mb-1" x-text="ep.label"></div>
+                  <div class="text-xs font-mono text-foreground truncate" x-text="ep.url"></div>
+                </div>
+                <i data-lucide="copy" class="w-3.5 h-3.5 text-muted-foreground group-hover:text-primary shrink-0 transition-colors"></i>
+              </button>
+            </template>
           </div>
-          <button @click="refreshAllModels()"
-                  :disabled="models.refreshing"
-                  class="text-[11px] font-medium border border-border px-3 py-1.5 rounded-xl bg-primary/8 hover:bg-primary/15 transition-colors text-primary border-primary/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-            <i data-lucide="refresh-cw" class="w-3 h-3" :class="models.refreshing ? 'animate-spin' : ''"></i>
-            <span x-text="models.refreshing ? 'Refreshing...' : 'Refresh All Models'"></span>
-          </button>
+        </div>
+
+        <!-- Controls -->
+        <div class="flex flex-col lg:flex-row lg:items-center gap-3">
+          <div class="flex items-center gap-2 shrink-0">
+            <span class="text-[9px] font-600 text-muted-foreground uppercase tracking-[0.14em] font-mono">Available Models</span>
+            <span class="text-[9px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-full border border-border font-mono"
+                  x-text="`${formatNumber(filteredModels().length)} / ${formatNumber(models.totalCount)}`">—</span>
+          </div>
+
+          <div class="flex-1 flex flex-col sm:flex-row gap-2">
+            <div class="relative flex-1 min-w-0">
+              <i data-lucide="search" class="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"></i>
+              <input x-model="models.search" @input="models.page = 1" type="text" placeholder="Search models…"
+                     class="w-full bg-secondary border border-border rounded-xl pl-9 pr-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground placeholder:text-muted-foreground/60">
+            </div>
+
+            <!-- Provider filter -->
+            <div class="relative sm:w-52 shrink-0" x-data="{ open: false }" @click.outside="open = false">
+              <button type="button" @click="open = !open"
+                      class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm text-foreground flex items-center justify-between gap-2 focus:outline-none focus:ring-1 focus:ring-primary/40">
+                <span class="truncate" x-text="models.provider === 'all' ? 'All providers' : (models.providers.find(p => p.id === models.provider)?.name || models.provider)"></span>
+                <i data-lucide="chevron-down" class="w-3.5 h-3.5 shrink-0 text-muted-foreground transition-transform duration-150" :class="open ? 'rotate-180' : ''"></i>
+              </button>
+              <div x-show="open" x-transition.opacity.duration.100ms
+                   class="absolute z-30 mt-1.5 w-full max-h-64 overflow-y-auto bg-card border border-border rounded-xl shadow-xl">
+                <button type="button" @click="models.provider = 'all'; models.page = 1; open = false"
+                        class="w-full text-left px-3 py-2 text-sm transition-colors"
+                        :class="models.provider === 'all' ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-secondary'">All providers</button>
+                <template x-for="p in models.providers" :key="'f-'+p.id">
+                  <button type="button" @click="models.provider = p.id; models.page = 1; open = false"
+                          class="w-full text-left px-3 py-2 text-sm transition-colors flex items-center justify-between gap-2"
+                          :class="models.provider === p.id ? 'bg-primary/10 text-primary' : 'text-foreground hover:bg-secondary'">
+                    <span class="truncate" x-text="p.name"></span>
+                    <span class="text-[10px] font-mono text-muted-foreground shrink-0" x-text="p.models.length"></span>
+                  </button>
+                </template>
+              </div>
+            </div>
+
+            <button @click="refreshAllModels()" :disabled="models.refreshing"
+                    class="text-[11px] font-medium border border-primary/20 px-3 py-2 rounded-xl bg-primary/8 hover:bg-primary/15 transition-colors text-primary flex items-center justify-center gap-2 disabled:opacity-50 shrink-0">
+              <i data-lucide="refresh-cw" class="w-3 h-3" :class="models.refreshing ? 'animate-spin' : ''"></i>
+              <span x-text="models.refreshing ? 'Refreshing…' : 'Refresh All'"></span>
+            </button>
+          </div>
         </div>
 
         <template x-if="models.loading">
@@ -889,45 +948,50 @@
         </template>
 
         <template x-if="!models.loading">
-          <div class="space-y-4">
-            <template x-for="provider in models.providers" :key="provider.name">
-              <div class="bg-card border border-border rounded-2xl overflow-hidden">
-                <div class="px-4 py-3 border-b border-border flex items-center justify-between bg-secondary/30">
-                  <div class="flex items-center gap-2">
-                    <div class="w-6 h-6 rounded flex items-center justify-center shrink-0 border"
-                         :class="provider.id === 'kimchi'  ? 'bg-orange-500/10 text-orange-400 border-orange-500/20' :
-                                 provider.id === 'cavoti'  ? 'bg-sky-500/10 text-sky-400 border-sky-500/20' :
-                                 provider.id === 'bluesminds'  ? 'bg-violet-500/10 text-violet-400 border-violet-500/20' :
-                                 provider.id === 'bynara' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' :
-                                 provider.id === 'dahl' ? 'bg-rose-500/10 text-rose-400 border-rose-500/20' :
-                                 provider.id === 'qwen_cloud' ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' :
-                                 provider.id === 'marketku' ? 'bg-green-500/10 text-green-400 border-green-500/20' :
-                                 provider.id === 'atomesus' ? 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20' :
-                                 'bg-amber-500/10 text-amber-400 border-amber-500/20'">
-                      <i data-lucide="layers" class="w-3 h-3"></i>
-                    </div>
-                    <span class="text-[11px] font-600 text-foreground uppercase tracking-[0.14em] font-mono" x-text="provider.name"></span>
-                  </div>
-                  <span class="text-[9px] text-muted-foreground font-mono" x-text="`${provider.models.length} models`"></span>
+          <div class="bg-card border border-border rounded-2xl overflow-hidden">
+            <template x-if="!filteredModels().length">
+              <div class="px-4 py-16 text-center">
+                <div class="flex flex-col items-center gap-3 text-muted-foreground">
+                  <i data-lucide="layers" class="w-8 h-8 opacity-20"></i>
+                  <p class="text-sm font-medium">No models match your filters</p>
                 </div>
-                <div class="p-4">
-                  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
-                    <template x-for="model in provider.models" :key="model">
-                      <button @click="copyModelToClipboard(model)"
-                              class="group relative px-3 py-2 bg-secondary/50 hover:bg-secondary border border-border rounded-xl text-left transition-all hover:border-primary/30 hover:shadow-sm">
-                        <div class="flex items-center justify-between gap-2">
-                          <span class="text-xs font-mono text-foreground truncate flex-1" x-text="model"></span>
-                          <i data-lucide="copy" class="w-3 h-3 text-muted-foreground/50 group-hover:text-primary shrink-0 transition-colors"></i>
-                        </div>
-                        <div x-show="models.copied === model"
-                             x-transition:enter="transition ease-out duration-100"
-                             x-transition:enter-start="opacity-0 scale-95"
-                             x-transition:enter-end="opacity-100 scale-100"
-                             class="absolute inset-0 flex items-center justify-center bg-accent/90 rounded-xl">
-                          <span class="text-[10px] font-600 text-white uppercase tracking-wider">Copied!</span>
-                        </div>
-                      </button>
-                    </template>
+              </div>
+            </template>
+
+            <template x-if="filteredModels().length">
+              <div>
+                <div class="divide-y divide-border/40">
+                  <template x-for="m in pagedModels()" :key="m.id">
+                    <button @click="copyModelToClipboard(m.id)"
+                            class="group w-full flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-secondary/25 transition-colors text-left">
+                      <div class="flex items-center gap-2.5 min-w-0">
+                        <span class="w-5 h-5 rounded-lg flex items-center justify-center shrink-0 text-[9px] font-700 uppercase border"
+                              :class="providerAccent(m.providerId)" x-text="m.providerId.slice(0,2)"></span>
+                        <span class="font-mono text-xs text-foreground truncate" x-text="m.id"></span>
+                      </div>
+                      <div class="flex items-center gap-2.5 shrink-0">
+                        <span class="hidden sm:inline text-[10px] text-muted-foreground font-mono" x-text="m.providerName"></span>
+                        <span x-show="models.copied === m.id" class="text-[10px] font-600 text-accent uppercase tracking-wider">Copied</span>
+                        <i data-lucide="copy" class="w-3.5 h-3.5 text-muted-foreground group-hover:text-primary transition-colors"></i>
+                      </div>
+                    </button>
+                  </template>
+                </div>
+
+                <!-- Pagination -->
+                <div class="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-border">
+                  <span class="text-[11px] text-muted-foreground font-mono"
+                        x-text="`${(models.page - 1) * models.perPage + 1}–${Math.min(models.page * models.perPage, filteredModels().length)} of ${formatNumber(filteredModels().length)}`"></span>
+                  <div class="flex items-center gap-1">
+                    <button @click="models.page = 1" :disabled="models.page === 1"
+                            class="px-2.5 py-1.5 rounded-lg text-[11px] font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-30 disabled:cursor-not-allowed">First</button>
+                    <button @click="models.page = Math.max(1, models.page - 1)" :disabled="models.page === 1"
+                            class="px-2.5 py-1.5 rounded-lg text-[11px] font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-30 disabled:cursor-not-allowed">Prev</button>
+                    <span class="px-3 py-1.5 text-[11px] font-mono text-foreground" x-text="`${models.page} / ${modelPageCount()}`"></span>
+                    <button @click="models.page = Math.min(modelPageCount(), models.page + 1)" :disabled="models.page >= modelPageCount()"
+                            class="px-2.5 py-1.5 rounded-lg text-[11px] font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-30 disabled:cursor-not-allowed">Next</button>
+                    <button @click="models.page = modelPageCount()" :disabled="models.page >= modelPageCount()"
+                            class="px-2.5 py-1.5 rounded-lg text-[11px] font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-30 disabled:cursor-not-allowed">Last</button>
                   </div>
                 </div>
               </div>
@@ -949,10 +1013,10 @@
             <span class="text-[9px] text-muted-foreground bg-secondary px-2 py-0.5 rounded-full border border-border font-mono"
                   x-text="routing.loading ? 'loading…' : `${routing.providers.filter(p => p.requests > 0).length} / ${routing.providers.length} providers used`">—</span>
           </div>
-          <div class="flex items-center gap-1 p-1 bg-secondary border border-border rounded-xl">
+          <div class="flex items-center gap-1 p-1 bg-secondary border border-border rounded-xl w-full sm:w-auto overflow-x-auto">
             <template x-for="r in ['today','24h','7d','30d','60d']" :key="r">
               <button @click="setRoutingRange(r)"
-                      class="px-3 py-1 rounded-lg text-[11px] font-600 transition-colors"
+                      class="px-3 py-1 rounded-lg text-[11px] font-600 transition-colors whitespace-nowrap flex-1 sm:flex-none"
                       :class="routing.range === r ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'"
                       x-text="r === 'today' ? 'Today' : r.toUpperCase()"></button>
             </template>
@@ -985,7 +1049,10 @@
               </span>
             </div>
 
-            <div class="relative w-full h-[420px]">
+            <!-- Below md the node cards can't fit around a hub without
+                 colliding, so the graph is desktop-only and small screens get
+                 the list underneath instead. -->
+            <div class="relative w-full h-[460px] hidden md:block">
               <template x-if="!routing.providers.length">
                 <div class="absolute inset-0 flex flex-col items-center justify-center gap-3 text-muted-foreground">
                   <i data-lucide="network" class="w-8 h-8 opacity-20"></i>
@@ -1044,6 +1111,32 @@
                       <span class="text-primary" x-text="`↑${compactNumber(node.input_tokens)}`"></span>
                       <span class="text-accent" x-text="`↓${compactNumber(node.output_tokens)}`"></span>
                       <span x-show="node.errors > 0" class="text-destructive" x-text="`${node.errors} err`"></span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Mobile fallback for the graph above -->
+            <div class="md:hidden divide-y divide-border/40">
+              <template x-if="!routing.providers.length">
+                <div class="px-4 py-12 text-center text-muted-foreground text-sm">No providers configured</div>
+              </template>
+              <template x-for="node in routingNodes()" :key="'m-'+node.prefix">
+                <div class="px-4 py-3 flex items-center gap-3"
+                     :class="node.live ? 'bg-primary/5' : ''">
+                  <span class="w-7 h-7 rounded-lg flex items-center justify-center shrink-0 text-[10px] font-700 uppercase border"
+                        :class="node.accent" x-text="node.prefix.slice(0,2)"></span>
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2">
+                      <span class="text-sm font-600 truncate" x-text="node.name"></span>
+                      <span x-show="node.live" class="w-1.5 h-1.5 rounded-full bg-primary animate-pulse shrink-0"></span>
+                    </div>
+                    <div class="flex items-center gap-2.5 text-[10px] font-mono text-muted-foreground mt-0.5">
+                      <span x-text="`${formatNumber(node.requests)} req`"></span>
+                      <span x-text="`${node.key_count} keys`"></span>
+                      <span x-show="node.requests > 0" class="text-primary" x-text="`&#8593;${compactNumber(node.input_tokens)}`"></span>
+                      <span x-show="node.requests > 0" class="text-accent" x-text="`&#8595;${compactNumber(node.output_tokens)}`"></span>
                     </div>
                   </div>
                 </div>
@@ -1368,7 +1461,12 @@ function dashboard() {
       refreshing: false,
       providers: [],
       totalCount: 0,
-      copied: null
+      copied: null,
+      search: '',
+      provider: 'all',
+      page: 1,
+      perPage: 25,
+      _flat: [],   // rebuilt by fetchModels; filtering/paging reads from here
     },
 
     stats: {
@@ -1919,6 +2017,15 @@ function dashboard() {
 
         this.models.providers = [...builtinProviders, ...customProviders].filter(p => p.models.length > 0);
         this.models.totalCount = this.models.providers.reduce((sum, p) => sum + p.models.length, 0);
+        // Flatten once here rather than on every keystroke -- with 800+
+        // models, re-deriving this inside the filter would be wasteful.
+        this.models._flat = this.models.providers.flatMap(p =>
+          p.models.map(id => ({ id, providerId: p.id, providerName: p.name, search: (id + ' ' + p.name).toLowerCase() }))
+        );
+        if (this.models.provider !== 'all' && !this.models.providers.some(p => p.id === this.models.provider)) {
+          this.models.provider = 'all';
+        }
+        this.models.page = 1;
         this.models.loaded = true;
         this.$nextTick(() => lucide.createIcons());
       } catch (e) {
@@ -1926,6 +2033,32 @@ function dashboard() {
       } finally {
         this.models.loading = false;
       }
+    },
+
+    routerEndpoints() {
+      const base = window.location.origin;
+      return [
+        { label: 'OpenAI-compatible', url: `${base}/v1` },
+        { label: 'Anthropic-compatible', url: `${base}/v1/messages` },
+      ];
+    },
+
+    filteredModels() {
+      const q = this.models.search.trim().toLowerCase();
+      return this.models._flat.filter(m =>
+        (this.models.provider === 'all' || m.providerId === this.models.provider) &&
+        (!q || m.search.includes(q))
+      );
+    },
+
+    modelPageCount() {
+      return Math.max(1, Math.ceil(this.filteredModels().length / this.models.perPage));
+    },
+
+    pagedModels() {
+      const page = Math.min(this.models.page, this.modelPageCount());
+      const start = (page - 1) * this.models.perPage;
+      return this.filteredModels().slice(start, start + this.models.perPage);
     },
 
     async refreshAllModels() {

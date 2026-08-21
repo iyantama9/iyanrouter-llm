@@ -65,7 +65,7 @@
       --secondary: 0 0% 93%;
       --secondary-foreground: 0 0% 8%;
       --muted: 0 0% 93%;
-      --muted-foreground: 0 0% 44%;
+      --muted-foreground: 0 0% 34%;
       --accent: 158 50% 38%;
       --accent-foreground: 0 0% 100%;
       --destructive: 0 72% 51%;
@@ -86,7 +86,7 @@
       --secondary: 0 0% 11%;
       --secondary-foreground: 0 0% 92%;
       --muted: 0 0% 11%;
-      --muted-foreground: 0 0% 65%;
+      --muted-foreground: 0 0% 82%;
       --accent: 158 50% 38%;
       --accent-foreground: 0 0% 4%;
       --destructive: 0 72% 51%;
@@ -96,49 +96,36 @@
       --ring: 17 85% 55%;
     }
 
-    /* Animatable CSS custom properties for glow position */
-    @property --glow-x {
-      syntax: '<percentage>';
-      initial-value: 25%;
-      inherits: false;
-    }
-    @property --glow-y {
-      syntax: '<percentage>';
-      initial-value: 20%;
-      inherits: false;
-    }
-
-    /* Dot grid + animated glowing spotlight. Dots read lighter than the
-       old crossing-lines grid -- the lines drew the eye into the background
-       instead of leaving it as texture. */
+    /* Plain white dot grid, slowly drifting and breathing so the page has a
+       sense of life without an accent-coloured spotlight competing with the
+       content for attention. */
     body, .grid-bg {
-      background-image:
-        radial-gradient(ellipse 85% 70% at var(--glow-x) var(--glow-y), rgba(232,112,64,0.28) 0%, rgba(232,112,64,0.08) 35%, transparent 70%),
-        radial-gradient(currentColor 1.35px, transparent 1.35px);
-      background-size: auto, 26px 26px;
-      background-position: 0 0, 13px 13px;
-      color: rgba(255,255,255,0.14);
-      animation: glow-drift 20s ease-in-out infinite;
+      background-image: radial-gradient(currentColor 1.35px, transparent 1.35px);
+      background-size: 26px 26px;
+      animation: grid-drift 26s linear infinite, grid-breathe 9s ease-in-out infinite;
     }
 
     html:not(.dark) body,
     html:not(.dark) .grid-bg {
-      color: rgba(0,0,0,0.13);
-      background-image:
-        radial-gradient(ellipse 85% 70% at var(--glow-x) var(--glow-y), rgba(232,112,64,0.18) 0%, rgba(232,112,64,0.05) 35%, transparent 70%),
-        radial-gradient(currentColor 1.35px, transparent 1.35px);
+      animation: grid-drift 26s linear infinite, grid-breathe-light 9s ease-in-out infinite;
     }
 
-    @keyframes glow-drift {
-      0%   { --glow-x: 22%; --glow-y: 18%; }
-      25%  { --glow-x: 80%; --glow-y: 14%; }
-      50%  { --glow-x: 68%; --glow-y: 76%; }
-      75%  { --glow-x: 14%; --glow-y: 62%; }
-      100% { --glow-x: 22%; --glow-y: 18%; }
+    @keyframes grid-drift {
+      from { background-position: 0 0; }
+      to   { background-position: 26px 26px; }
+    }
+    @keyframes grid-breathe {
+      0%, 100% { color: rgba(255,255,255,0.10); }
+      50%      { color: rgba(255,255,255,0.22); }
+    }
+    @keyframes grid-breathe-light {
+      0%, 100% { color: rgba(0,0,0,0.08); }
+      50%      { color: rgba(0,0,0,0.16); }
     }
 
     @media (prefers-reduced-motion: reduce) {
-      body, .grid-bg { animation: none; }
+      body, .grid-bg { animation: none; color: rgba(255,255,255,0.16); }
+      html:not(.dark) body, html:not(.dark) .grid-bg { color: rgba(0,0,0,0.12); }
     }
 
     /* Force readable body text in rendered markdown regardless of whether the
