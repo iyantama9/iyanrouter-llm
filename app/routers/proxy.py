@@ -28,7 +28,7 @@ from app.sse import sse_broadcaster
 from app.brain.middleware import BrainMiddleware
 from app.brain.memory import MemoryManager
 from app.brain.storage import BrainStorage
-from app.database import verify_router_api_key
+from app.database import verify_router_api_key, add_router_key_token_usage
 
 
 router = APIRouter()
@@ -74,9 +74,51 @@ async def _check_router_auth(request: Request):
 
     # Check router API keys from database
     if token.startswith("rtr_"):
-        return await verify_router_api_key(token)
+        key_row = await verify_router_api_key(token)
+        if not key_row:
+            return False
+        # Stash the row so downstream code can enforce this key's model
+        # allowlist and bill its token quota.
+        request.state.router_key = key_row
+        return True
 
     return False
+
+
+def _router_key(request: Request):
+    return getattr(request.state, "router_key", None)
+
+
+def _model_allowed_for_key(request: Request, model: str):
+    """
+    Enforce a router key's model allowlist. Returns None when allowed, or an
+    error message. An empty allowlist means the key may use every model.
+    """
+    key_row = _router_key(request)
+    if not key_row:
+        return None
+    raw = (key_row.get("allowed_models") or "").strip()
+    if not raw:
+        return None
+    allowed = {m.strip() for m in raw.split(",") if m.strip()}
+    if model in allowed:
+        return None
+    shown = sorted(allowed)[:10]
+    return (
+        f"This API key is not allowed to use model '{model}'. "
+        f"Allowed: {', '.join(shown)}{'...' if len(allowed) > 10 else ''}"
+    )
+
+
+async def _bill_router_key(request: Request, tokens: int):
+    """Charge a request's tokens against the router key that made it."""
+    key_row = _router_key(request)
+    if not key_row or tokens <= 0:
+        return
+    try:
+        await add_router_key_token_usage(key_row["id"], tokens)
+    except Exception as e:
+        print(f"[ROUTER-KEY] Failed to record token usage: {e}", flush=True)
 
 
 async def _save_brain_exchange(
@@ -415,6 +457,10 @@ async def messages(request: Request):
     # Custom (admin-added) providers get a self-contained dispatch path,
     # short-circuiting before any of the built-in routing/brain logic below.
     requested_model_raw = payload.get("model", "") or ""
+    denied = _model_allowed_for_key(request, requested_model_raw)
+    if denied:
+        return JSONResponse(status_code=403, content={"error": {"message": denied}})
+
     for cprefix in config_module.CUSTOM_PROVIDERS:
         if requested_model_raw.startswith(f"{cprefix}/"):
             payload["model"] = requested_model_raw[len(cprefix) + 1:]
@@ -436,6 +482,7 @@ async def messages(request: Request):
                 usage.get("input_tokens", 0) or 0, usage.get("output_tokens", 0) or 0,
                 provider=cprefix,
             )
+            await _bill_router_key(request, (usage.get("input_tokens", 0) or 0) + (usage.get("output_tokens", 0) or 0))
             await _broadcast_request_log()
             return JSONResponse(status_code=status, content=body)
 
@@ -691,6 +738,7 @@ async def messages(request: Request):
                 result = _qwen_image_response(data, log_model, msg_id)
                 total_ms = int((time.time() - start_req_time) * 1000)
                 add_request_log(log_model, 200, current_key, False, total_ms, input_tokens, 0)
+                await _bill_router_key(request, input_tokens)
                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                 await sse_broadcaster.broadcast("status", await _build_status_dict())
                 return JSONResponse(result)
@@ -903,6 +951,7 @@ async def messages(request: Request):
                                 total_ms = int((time.time() - start_req_time) * 1000)
                                 ttft_ms = int((first_token_time - start_req_time) * 1000) if first_token_time else total_ms
                                 add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, token_tracker["output_tokens"])
+                                await _bill_router_key(request, input_tokens + token_tracker["output_tokens"])
 
                                 final_response = [
                                     block for block in accumulated_response if block is not None
@@ -1127,6 +1176,7 @@ async def messages(request: Request):
                 cached_tokens = _extract_cached_tokens(openai_resp)
                 total_ms = int((time.time() - start_req_time) * 1000)
                 add_request_log(log_model, 200, current_key, rotated_occurred, total_ms, input_tokens, output_tokens, cached_tokens)
+                await _bill_router_key(request, input_tokens + output_tokens)
 
                 if enable_brain and user_message_text:
                     await _save_brain_exchange(
@@ -1310,6 +1360,10 @@ async def chat_completions(request: Request):
     requested_model = payload.get("model") or "cv/gpt-5.4-mini"
     print(f"[CHAT-COMPLETIONS] Model: {requested_model}, stream: {payload.get('stream')}", flush=True)
 
+    denied = _model_allowed_for_key(request, requested_model)
+    if denied:
+        return JSONResponse(status_code=403, content={"error": {"message": denied}})
+
     for cprefix in config_module.CUSTOM_PROVIDERS:
         if requested_model.startswith(f"{cprefix}/"):
             model_name = requested_model[len(cprefix) + 1:]
@@ -1331,6 +1385,7 @@ async def chat_completions(request: Request):
                 usage.get("input_tokens", 0) or 0, usage.get("output_tokens", 0) or 0,
                 provider=cprefix,
             )
+            await _bill_router_key(request, (usage.get("input_tokens", 0) or 0) + (usage.get("output_tokens", 0) or 0))
             await _broadcast_request_log()
 
             if status != 200:

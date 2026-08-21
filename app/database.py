@@ -324,6 +324,13 @@ async def setup_tables():
         CREATE INDEX IF NOT EXISTS idx_router_api_keys_value
         ON router_api_keys(key_value) WHERE is_active = TRUE
     """)
+    # Per-key limits. NULL expires_at / 0 token_quota both mean "unlimited",
+    # so existing keys keep working untouched after this migration.
+    await execute("ALTER TABLE router_api_keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP WITH TIME ZONE")
+    await execute("ALTER TABLE router_api_keys ADD COLUMN IF NOT EXISTS token_quota BIGINT DEFAULT 0")
+    await execute("ALTER TABLE router_api_keys ADD COLUMN IF NOT EXISTS tokens_used BIGINT DEFAULT 0")
+    # Comma-separated allowlist of prefixed model ids; empty = every model.
+    await execute("ALTER TABLE router_api_keys ADD COLUMN IF NOT EXISTS allowed_models TEXT NOT NULL DEFAULT ''")
 
     # ── Custom (admin-added) providers ──
     await execute("""
@@ -441,34 +448,53 @@ async def cleanup_old_sessions(retention_days: int = 30):
     )
 
 # ── Router API Key Helpers ──
-async def create_router_api_key(key_name: str):
-    """Generate a new router API key."""
+async def create_router_api_key(key_name: str, expires_at=None, token_quota: int = 0, allowed_models: str = ""):
+    """Generate a new router API key, optionally scoped by expiry/quota/models."""
     import secrets
     key_value = f"rtr_{secrets.token_urlsafe(32)}"
     return await fetchrow(
-        "INSERT INTO router_api_keys (key_value, key_name) VALUES ($1, $2) RETURNING *",
-        key_value, key_name
+        """INSERT INTO router_api_keys (key_value, key_name, expires_at, token_quota, allowed_models)
+           VALUES ($1, $2, $3, $4, $5) RETURNING *""",
+        key_value, key_name, expires_at, token_quota, allowed_models
     )
 
 async def get_router_api_keys():
-    """Get all active router API keys."""
+    """Get all router API keys with their limits and usage."""
     return await fetch(
-        "SELECT id, key_name, created_at, last_used_at, is_active FROM router_api_keys ORDER BY created_at DESC"
+        """SELECT id, key_name, created_at, last_used_at, is_active,
+                  expires_at, token_quota, tokens_used, allowed_models
+           FROM router_api_keys ORDER BY created_at DESC"""
     )
 
 async def verify_router_api_key(key_value: str):
-    """Verify router API key and update last_used_at."""
+    """
+    Check a router key and return its row, or None if it can't be used.
+
+    Returns the row (rather than a bool) so callers can enforce the model
+    allowlist and attribute token usage back to this key.
+    """
     key = await fetchrow(
-        "SELECT id FROM router_api_keys WHERE key_value = $1 AND is_active = TRUE",
+        """SELECT id, token_quota, tokens_used, allowed_models, expires_at
+           FROM router_api_keys
+           WHERE key_value = $1
+             AND is_active = TRUE
+             AND (expires_at IS NULL OR expires_at > NOW())
+             AND (token_quota = 0 OR tokens_used < token_quota)""",
         key_value
     )
-    if key:
-        await execute(
-            "UPDATE router_api_keys SET last_used_at = NOW() WHERE id = $1",
-            key["id"]
-        )
-        return True
-    return False
+    if not key:
+        return None
+    await execute("UPDATE router_api_keys SET last_used_at = NOW() WHERE id = $1", key["id"])
+    return dict(key)
+
+async def add_router_key_token_usage(key_id: int, tokens: int):
+    """Bill tokens against a router key's quota."""
+    if not key_id or tokens <= 0:
+        return
+    await execute(
+        "UPDATE router_api_keys SET tokens_used = tokens_used + $1 WHERE id = $2",
+        int(tokens), key_id
+    )
 
 async def delete_router_api_key(key_id: int):
     """Delete a router API key."""

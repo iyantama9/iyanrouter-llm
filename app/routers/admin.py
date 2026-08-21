@@ -779,11 +779,32 @@ async def api_get_router_keys(user: None = Depends(require_auth)):
 @router.post("/api/router-keys")
 async def api_create_router_key(payload: dict = Body(...), user: None = Depends(require_auth)):
     """Generate a new router API key."""
+    import datetime
+
     key_name = payload.get("key_name", "").strip()
     if not key_name:
         return JSONResponse(status_code=400, content={"success": False, "message": "Key name is required"})
 
-    key = await create_router_api_key(key_name)
+    # 0 / omitted means "never expires" and "no quota", matching how existing
+    # keys behave so nothing changes for them.
+    try:
+        expires_in_days = int(payload.get("expires_in_days") or 0)
+        token_quota = int(payload.get("token_quota") or 0)
+    except (TypeError, ValueError):
+        return JSONResponse(status_code=400, content={"success": False, "message": "expires_in_days and token_quota must be numbers"})
+    if expires_in_days < 0 or token_quota < 0:
+        return JSONResponse(status_code=400, content={"success": False, "message": "expires_in_days and token_quota cannot be negative"})
+
+    expires_at = None
+    if expires_in_days > 0:
+        expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=expires_in_days)
+
+    models = payload.get("allowed_models") or []
+    if not isinstance(models, list):
+        return JSONResponse(status_code=400, content={"success": False, "message": "allowed_models must be a list"})
+    allowed_models = ",".join(sorted({str(m).strip() for m in models if str(m).strip()}))
+
+    key = await create_router_api_key(key_name, expires_at, token_quota, allowed_models)
     return {"success": True, "key": _json_safe_row(key)}
 
 
