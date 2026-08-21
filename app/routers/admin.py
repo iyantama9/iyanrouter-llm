@@ -307,16 +307,23 @@ async def api_set_active_key(payload: dict = Body(...), user: None = Depends(req
 
 @router.get("/api/models")
 async def api_get_models(user: None = Depends(require_auth)):
+    builtin = {
+        "kimchi": ("kc", [f"kc/{m}" for m in config_module.KIMCHI_MODELS]),
+        "cavoti": ("cv", [f"cv/{m}" for m in config_module.CAVOTI_MODELS]),
+        "bluesminds": ("bm", [f"bm/{m}" for m in config_module.BLUESMINDS_MODELS]),
+        "bynara": ("nry", [f"nry/{m}" for m in config_module.NARA_MODELS]),
+        "dahl": ("dahl", [f"dh/{m}" for m in config_module.DAHL_MODELS_SHORT]),
+        "qwen_cloud": ("qc", [f"qc/{m}" for m in config_module.QWEN_CLOUD_MODELS]),
+        "marketku": ("marketku", [f"mk/{m}" for m in config_module.MARKETKU_MODELS]),
+        "atomesus": ("atomesus", [f"at/{m}" for m in config_module.ATOMESUS_MODELS]),
+        "weize": ("weize", config_module.WEIZE_MODELS),
+    }
+    # A removed built-in keeps its cached model list around (so re-adding a
+    # key doesn't need a fresh /models refresh to work again) -- just don't
+    # advertise it anywhere while it's disabled.
     result = {
-        "kimchi": [f"kc/{m}" for m in config_module.KIMCHI_MODELS],
-        "cavoti": [f"cv/{m}" for m in config_module.CAVOTI_MODELS],
-        "bluesminds": [f"bm/{m}" for m in config_module.BLUESMINDS_MODELS],
-        "bynara": [f"nry/{m}" for m in config_module.NARA_MODELS],
-        "dahl": [f"dh/{m}" for m in config_module.DAHL_MODELS_SHORT],
-        "qwen_cloud": [f"qc/{m}" for m in config_module.QWEN_CLOUD_MODELS],
-        "marketku": [f"mk/{m}" for m in config_module.MARKETKU_MODELS],
-        "atomesus": [f"at/{m}" for m in config_module.ATOMESUS_MODELS],
-        "weize": config_module.WEIZE_MODELS,
+        key: ([] if prefix in config_module.DISABLED_PROVIDERS else models)
+        for key, (prefix, models) in builtin.items()
     }
     # Custom providers are keyed by their own prefix so the Playground picker
     # can group and label them without any hardcoded knowledge of them.

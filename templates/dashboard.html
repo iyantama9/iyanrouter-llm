@@ -1780,23 +1780,32 @@ function dashboard() {
     async fetchModels() {
       this.models.loading = true;
       try {
+        if (!this.providerMgmt.providers.length) await this.fetchProviders();
         const r = await fetch('/api/models');
         if (!r.ok) { if (r.status === 401) window.location = '/login'; return; }
         const d = await r.json();
 
-        // Transform to provider list format
-        this.models.providers = [
-          { id: 'kimchi', name: 'Kimchi', models: d.kimchi || [] },
-          { id: 'cavoti', name: 'Cavoti', models: d.cavoti || [] },
-          { id: 'bluesminds', name: 'Bluesminds', models: d.bluesminds || [] },
-          { id: 'bynara', name: 'byNara', models: d.bynara || [] },
-          { id: 'dahl', name: 'Dahl', models: d.dahl || [] },
-          { id: 'qwen_cloud', name: 'Qwen Cloud', models: d.qwen_cloud || [] },
-          { id: 'marketku', name: 'MarketKu', models: d.marketku || [] },
-          { id: 'atomesus', name: 'Atomesus', models: d.atomesus || [] },
-          { id: 'weize', name: 'Weize', models: d.weize || [] }
+        // Built-ins are keyed by a legacy display name in /api/models; map
+        // those to their real prefix so removed providers -- which come
+        // back as an empty list -- get filtered out below instead of
+        // showing an empty card, and so custom providers (keyed directly by
+        // their own prefix) can be picked up without hardcoding each one.
+        const builtinDefs = [
+          ['kimchi', 'kc', 'Kimchi'], ['cavoti', 'cv', 'Cavoti'], ['bluesminds', 'bm', 'Bluesminds'],
+          ['bynara', 'nry', 'byNara'], ['dahl', 'dahl', 'Dahl'], ['qwen_cloud', 'qc', 'Qwen Cloud'],
+          ['marketku', 'marketku', 'MarketKu'], ['atomesus', 'atomesus', 'Atomesus'], ['weize', 'weize', 'Weize'],
         ];
+        const knownKeys = new Set(builtinDefs.map(([key]) => key));
 
+        const builtinProviders = builtinDefs.map(([key, id, name]) => ({ id, name, models: d[key] || [] }));
+        const customProviders = Object.keys(d)
+          .filter(key => !knownKeys.has(key))
+          .map(key => {
+            const info = this.providerMgmt.providers.find(p => p.prefix === key);
+            return { id: key, name: info ? info.name : key, models: d[key] || [] };
+          });
+
+        this.models.providers = [...builtinProviders, ...customProviders].filter(p => p.models.length > 0);
         this.models.totalCount = this.models.providers.reduce((sum, p) => sum + p.models.length, 0);
         this.models.loaded = true;
         this.$nextTick(() => lucide.createIcons());

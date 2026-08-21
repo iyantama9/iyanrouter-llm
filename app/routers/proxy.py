@@ -329,24 +329,34 @@ async def list_models(request: Request):
         return JSONResponse(status_code=401, content={"error": {"message": "Invalid router password."}})
 
     models = []
-    for m in config_module.KIMCHI_MODELS:
-        models.append(f"kc/{m}")
-    for m in config_module.CAVOTI_MODELS:
-        models.append(f"cv/{m}")
-    for m in config_module.BLUESMINDS_MODELS:
-        models.append(f"bm/{m}")
-    for m in config_module.NARA_MODELS:
-        models.append(f"nry/{m}")
-    for m in config_module.DAHL_MODELS:
-        models.append(f"dh/{m}")
-    for m in config_module.QWEN_CLOUD_MODELS:
-        models.append(f"qc/{m}")
-    for m in config_module.MARKETKU_MODELS:
-        models.append(f"mk/{m}")
-    for m in config_module.ATOMESUS_MODELS:
-        models.append(f"at/{m}")
-    for m in config_module.WEIZE_MODELS:
-        models.append(f"wz/{m}")
+    disabled = config_module.DISABLED_PROVIDERS
+    if "kc" not in disabled:
+        for m in config_module.KIMCHI_MODELS:
+            models.append(f"kc/{m}")
+    if "cv" not in disabled:
+        for m in config_module.CAVOTI_MODELS:
+            models.append(f"cv/{m}")
+    if "bm" not in disabled:
+        for m in config_module.BLUESMINDS_MODELS:
+            models.append(f"bm/{m}")
+    if "nry" not in disabled:
+        for m in config_module.NARA_MODELS:
+            models.append(f"nry/{m}")
+    if "dahl" not in disabled:
+        for m in config_module.DAHL_MODELS:
+            models.append(f"dh/{m}")
+    if "qc" not in disabled:
+        for m in config_module.QWEN_CLOUD_MODELS:
+            models.append(f"qc/{m}")
+    if "marketku" not in disabled:
+        for m in config_module.MARKETKU_MODELS:
+            models.append(f"mk/{m}")
+    if "atomesus" not in disabled:
+        for m in config_module.ATOMESUS_MODELS:
+            models.append(f"at/{m}")
+    if "weize" not in disabled:
+        for m in config_module.WEIZE_MODELS:
+            models.append(f"wz/{m}")
     for prefix, info in config_module.CUSTOM_PROVIDERS.items():
         for m in info.get("models") or []:
             models.append(f"{prefix}/{m}")
