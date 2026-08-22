@@ -2235,24 +2235,29 @@ function dashboard() {
             model_prompts: this.activeModelPrompts(),
           })
         });
-        if (!r.ok) throw new Error('Failed to generate key');
-        const d = await r.json();
-        if (d.success) {
-          // Show full key only once
-          d.key.key_value_display = d.key.key_value;
-          this.routerKeys.keys.unshift(d.key);
-          this.routerKeys.newKeyName = '';
-          this.routerKeys.expiresInDays = 0;
-          this.routerKeys.quotaPreset = 'unlimited';
-          this.routerKeys.tokenQuota = 100000;
-          this.routerKeys.selectedModels = [];
-          this.routerKeys.modelPrompts = {};
-          this.routerKeys.formOpen = false;
-          this.toast('Router API key generated! Copy it now - it won\'t be shown again.', 'success');
-          this.$nextTick(() => lucide.createIcons());
+        // The API explains *why* it refused (prompt too long, prompt for a
+        // model the key can't call, bad numbers). Throwing a generic error
+        // here used to discard that and leave "Failed to generate key" as the
+        // only clue. A success:false with a 200 status fell through silently.
+        const d = await r.json().catch(() => null);
+        if (!r.ok || !d || !d.success) {
+          this.toast(d?.message || `Failed to generate key (HTTP ${r.status})`, 'error');
+          return;
         }
+        // Show full key only once
+        d.key.key_value_display = d.key.key_value;
+        this.routerKeys.keys.unshift(d.key);
+        this.routerKeys.newKeyName = '';
+        this.routerKeys.expiresInDays = 0;
+        this.routerKeys.quotaPreset = 'unlimited';
+        this.routerKeys.tokenQuota = 100000;
+        this.routerKeys.selectedModels = [];
+        this.routerKeys.modelPrompts = {};
+        this.routerKeys.formOpen = false;
+        this.toast('Router API key generated! Copy it now - it won\'t be shown again.', 'success');
+        this.$nextTick(() => lucide.createIcons());
       } catch (e) {
-        this.toast('Failed to generate key', 'error');
+        this.toast('Network error while generating key', 'error');
       } finally {
         this.routerKeys.generating = false;
       }
