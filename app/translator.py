@@ -516,10 +516,16 @@ async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0, toke
     # Check for error in first line before yielding message_start
     first_chunk = None
     stream_iter = openai_stream.aiter_lines()
+    unframed = []
     try:
         while True:
             line = await stream_iter.__anext__()
             if not line.startswith("data: "):
+                # Some providers answer 200 and then send a bare JSON error body
+                # with no SSE framing at all. Hold on to those lines so they can
+                # still be read as an error if no data: event ever shows up.
+                if line.strip():
+                    unframed.append(line)
                 continue
             raw = line[6:]
             if raw.strip() == "[DONE]":
@@ -536,6 +542,16 @@ async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0, toke
                 continue
     except StopAsyncIteration:
         pass
+
+    if first_chunk is None and unframed:
+        try:
+            parsed = json.loads("\n".join(unframed))
+        except Exception:
+            parsed = None
+        if isinstance(parsed, dict) and parsed.get("error"):
+            err = parsed["error"]
+            message = err.get("message") if isinstance(err, dict) else str(err)
+            raise ValueError(message or "Unknown upstream error")
 
     yield f"event: message_start\ndata: {json.dumps({'type': 'message_start', 'message': {'id': msg_id, 'type': 'message', 'role': 'assistant', 'content': [], 'model': model, 'stop_reason': None, 'stop_sequence': None, 'usage': {'input_tokens': input_tokens, 'output_tokens': 1}}})}\n\n"
     yield f"event: ping\ndata: {json.dumps({'type': 'ping'})}\n\n"

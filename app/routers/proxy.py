@@ -335,6 +335,13 @@ async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool, di
                             try:
                                 async for chunk in resp.aiter_bytes():
                                     yield chunk
+                            except Exception as e:
+                                # The 200 headers are already on the wire, so a
+                                # mid-stream failure can't become a status code
+                                # any more. Emit an SSE error event instead of
+                                # letting the exception tear down the connection
+                                # and leave the client a bare network error.
+                                yield f"event: error\ndata: {json.dumps(to_anthropic_stream_error(str(e)))}\n\n"
                             finally:
                                 await resp.aclose()
                                 await client.aclose()
@@ -369,22 +376,51 @@ async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool, di
                     req = client.build_request("POST", url, headers=headers, json=upstream_payload)
                     resp = await client.send(req, stream=True)
                     if resp.status_code == 200:
-                        async def _relay():
-                            try:
-                                async for chunk in stream_as_anthropic(resp, shown_model, msg_id):
-                                    yield chunk
-                            finally:
-                                await resp.aclose()
-                                await client.aclose()
-                        return "stream", 200, _relay()
-                    body_bytes = await resp.aread()
-                    await resp.aclose()
-                    await client.aclose()
-                    try:
-                        last_body = json.loads(body_bytes)
-                    except Exception:
-                        last_body = {"error": {"message": body_bytes.decode(errors="replace")}}
-                    last_status = resp.status_code
+                        # Plenty of providers answer 200 and then put the real
+                        # failure inside the stream body. stream_as_anthropic
+                        # inspects the first data chunk before it emits
+                        # message_start, so pulling that first event here --
+                        # while we can still pick a status code and rotate to
+                        # the next key -- turns an in-band error into an honest
+                        # failure instead of a connection that just dies.
+                        agen = stream_as_anthropic(resp, shown_model, msg_id)
+                        first_event, in_band_error = None, None
+                        try:
+                            first_event = await agen.__anext__()
+                        except StopAsyncIteration:
+                            pass
+                        except ValueError as e:
+                            in_band_error = str(e)
+
+                        if in_band_error is None:
+                            async def _relay(agen=agen, first_event=first_event, resp=resp, client=client):
+                                try:
+                                    if first_event is not None:
+                                        yield first_event
+                                    async for chunk in agen:
+                                        yield chunk
+                                except Exception as e:
+                                    # Same bind as above: past this point the
+                                    # only way to report a failure is in-band.
+                                    yield f"event: error\ndata: {json.dumps(to_anthropic_stream_error(str(e)))}\n\n"
+                                finally:
+                                    await resp.aclose()
+                                    await client.aclose()
+                            return "stream", 200, _relay()
+
+                        await agen.aclose()
+                        await resp.aclose()
+                        await client.aclose()
+                        last_status, last_body = 502, {"error": {"message": in_band_error}}
+                    else:
+                        body_bytes = await resp.aread()
+                        await resp.aclose()
+                        await client.aclose()
+                        try:
+                            last_body = json.loads(body_bytes)
+                        except Exception:
+                            last_body = {"error": {"message": body_bytes.decode(errors="replace")}}
+                        last_status = resp.status_code
 
         except Exception as e:
             last_status, last_body = 502, {"error": {"message": f"{type(e).__name__}: {e}"}}

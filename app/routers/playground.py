@@ -67,23 +67,46 @@ async def api_playground_chat(request: Request, user: None = Depends(require_aut
     headers = {"Authorization": f"Bearer {ROUTER_PASSWORD}", "Content-Type": "application/json"}
 
     if payload.get("stream", False):
+        def _sse_error(message):
+            payload_ = {"type": "error", "error": {"type": "api_error", "message": message}}
+            return f"event: error\ndata: {json.dumps(payload_)}\n\n".encode()
+
         async def stream_generator():
             full_reply = ""
             async with httpx.AsyncClient() as client:
                 async with client.stream("POST", url, headers=headers, json=payload, timeout=300.0) as response:
-                    async for chunk in response.aiter_raw():
-                        yield chunk
+                    # A StreamingResponse commits to 200 before the router has
+                    # answered, so an upstream failure has to be handed to the
+                    # browser as an SSE error event. Re-raising instead would
+                    # abort the response mid-body and surface in the Playground
+                    # as an unexplained "Failed to fetch".
+                    if response.status_code != 200:
+                        raw = (await response.aread()).decode(errors="replace")
                         try:
-                            decoded = chunk.decode('utf-8')
-                            for line in decoded.split('\n'):
-                                if line.startswith('data: ') and line != 'data: [DONE]':
-                                    d = json.loads(line[6:])
-                                    if d.get("choices") and d["choices"][0].get("delta", {}).get("content"):
-                                        full_reply += d["choices"][0]["delta"]["content"]
-                                    elif d.get("type") == "content_block_delta" and d.get("delta", {}).get("text"):
-                                        full_reply += d["delta"]["text"]
+                            parsed = json.loads(raw)
+                            message = (parsed.get("error") or {}).get("message") or raw
                         except Exception:
-                            pass
+                            message = raw
+                        yield _sse_error(message or f"HTTP {response.status_code}")
+                        return
+
+                    try:
+                        async for chunk in response.aiter_raw():
+                            yield chunk
+                            try:
+                                decoded = chunk.decode('utf-8')
+                                for line in decoded.split('\n'):
+                                    if line.startswith('data: ') and line != 'data: [DONE]':
+                                        d = json.loads(line[6:])
+                                        if d.get("choices") and d["choices"][0].get("delta", {}).get("content"):
+                                            full_reply += d["choices"][0]["delta"]["content"]
+                                        elif d.get("type") == "content_block_delta" and d.get("delta", {}).get("text"):
+                                            full_reply += d["delta"]["text"]
+                            except Exception:
+                                pass
+                    except Exception as e:
+                        yield _sse_error(f"{type(e).__name__}: {e}")
+
             if session_id and full_reply:
                 await save_chat_message(session_id, "assistant", full_reply)
 
