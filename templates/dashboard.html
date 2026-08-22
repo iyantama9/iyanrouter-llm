@@ -882,7 +882,8 @@
 
         <!-- Router endpoint: what clients actually point at -->
         <div class="bg-card border border-border rounded-2xl p-4 sm:p-5">
-          <p class="text-[9px] font-600 text-muted-foreground uppercase tracking-[0.14em] font-mono mb-3">Router Endpoint</p>
+          <p class="text-[9px] font-600 text-muted-foreground uppercase tracking-[0.14em] font-mono mb-1">Base URL</p>
+          <p class="text-[10px] text-muted-foreground/70 mb-3">Same host either way — the two SDKs append different paths, so the base you configure differs.</p>
           <div class="grid sm:grid-cols-2 gap-3">
             <template x-for="ep in routerEndpoints()" :key="ep.label">
               <button @click="copyToClipboard(ep.url)"
@@ -890,6 +891,7 @@
                 <div class="min-w-0">
                   <div class="text-[9px] font-600 text-muted-foreground uppercase tracking-[0.12em] font-mono mb-1" x-text="ep.label"></div>
                   <div class="text-xs font-mono text-foreground truncate" x-text="ep.url"></div>
+                  <div class="text-[10px] text-muted-foreground/60 mt-1 font-mono truncate" x-text="ep.hint"></div>
                 </div>
                 <i data-lucide="copy" class="w-3.5 h-3.5 text-muted-foreground group-hover:text-primary shrink-0 transition-colors"></i>
               </button>
@@ -2332,11 +2334,15 @@ function dashboard() {
       }
     },
 
+    // Both SDKs talk to the same host -- they just append different paths, so
+    // the base URL you configure differs. The OpenAI client appends
+    // /chat/completions to its base; the Anthropic client appends the whole
+    // /v1/messages itself, so its base must NOT already include /v1.
     routerEndpoints() {
       const base = window.location.origin;
       return [
-        { label: 'OpenAI-compatible', url: `${base}/v1` },
-        { label: 'Anthropic-compatible', url: `${base}/v1/messages` },
+        { label: 'OpenAI-compatible', url: `${base}/v1`, hint: 'SDK appends /chat/completions' },
+        { label: 'Anthropic-compatible', url: base, hint: 'SDK appends /v1/messages' },
       ];
     },
 
