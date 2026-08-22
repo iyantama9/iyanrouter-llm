@@ -1723,53 +1723,61 @@ async def chat_completions(request: Request):
                                 return
 
                             async for chunk in resp.aiter_bytes():
-                                if not should_strip:
-                                    yield chunk
-                                    continue
-
-                                # Decode and parse SSE chunks
-                                text = chunk.decode('utf-8', errors='ignore')
-                                buffer += text
+                                # Every chunk gets parsed, not just the ones we
+                                # strip thinking tags from: upstream names itself
+                                # in each chunk's `model`, and that has to be
+                                # swapped for the alias the same way the
+                                # non-streaming path does it below.
+                                buffer += chunk.decode('utf-8', errors='ignore')
 
                                 # Process complete lines
                                 lines = buffer.split('\n')
                                 buffer = lines[-1]  # Keep incomplete line in buffer
 
                                 for line in lines[:-1]:
-                                    if line.startswith('data: '):
-                                        try:
-                                            data = json.loads(line[6:])
-                                            if 'choices' in data and len(data['choices']) > 0:
-                                                delta = data['choices'][0].get('delta', {})
-                                                content = delta.get('content', '')
-
-                                                if content:
-                                                    original = content
-                                                    # Track thinking tag state
-                                                    if '<thinking>' in content:
-                                                        inside_thinking = True
-                                                    if '</thinking>' in content:
-                                                        inside_thinking = False
-                                                        content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
-                                                    elif inside_thinking or '<thinking>' in content:
-                                                        content = re.sub(r'<thinking>.*', '', content, flags=re.DOTALL)
-
-                                                    if original != content:
-                                                        logger.info(f"[STREAM] Stripped: {repr(original)} -> {repr(content)}")
-
-                                                    # Update content in response
-                                                    data['choices'][0]['delta']['content'] = content
-                                                    if content:  # Only yield if there's content after stripping
-                                                        yield f"data: {json.dumps(data)}\n".encode('utf-8')
-                                                else:
-                                                    yield f"{line}\n".encode('utf-8')
-                                            else:
-                                                yield f"{line}\n".encode('utf-8')
-                                        except Exception as e:
-                                            logger.warning(f"[STREAM] Parse error: {e}")
-                                            yield f"{line}\n".encode('utf-8')
-                                    else:
+                                    if not line.startswith('data: '):
                                         yield f"{line}\n".encode('utf-8')
+                                        continue
+
+                                    try:
+                                        data = json.loads(line[6:])
+                                    except Exception:
+                                        # [DONE] and anything unparseable relays untouched
+                                        yield f"{line}\n".encode('utf-8')
+                                        continue
+
+                                    if should_strip and (data.get('choices') or []):
+                                        delta = data['choices'][0].get('delta', {})
+                                        content = delta.get('content', '')
+
+                                        if content:
+                                            original = content
+                                            # Track thinking tag state
+                                            if '<thinking>' in content:
+                                                inside_thinking = True
+                                            if '</thinking>' in content:
+                                                inside_thinking = False
+                                                content = re.sub(r'<thinking>.*?</thinking>', '', content, flags=re.DOTALL)
+                                            elif inside_thinking or '<thinking>' in content:
+                                                content = re.sub(r'<thinking>.*', '', content, flags=re.DOTALL)
+
+                                            if original != content:
+                                                logger.info(f"[STREAM] Stripped: {repr(original)} -> {repr(content)}")
+
+                                            # Update content in response
+                                            data['choices'][0]['delta']['content'] = content
+                                            if not content:  # Nothing left after stripping
+                                                continue
+
+                                    if data.get('model'):
+                                        data['model'] = display_model
+
+                                    yield f"data: {json.dumps(data)}\n".encode('utf-8')
+
+                            # The line buffer would otherwise swallow a final
+                            # event that arrived without a trailing newline.
+                            if buffer:
+                                yield buffer.encode('utf-8')
 
                 return StreamingResponse(stream_openai(), media_type="text/event-stream")
 
