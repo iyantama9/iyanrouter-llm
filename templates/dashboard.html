@@ -1449,24 +1449,28 @@
           <p class="text-[10px] text-muted-foreground/70">Leave empty to allow every model.</p>
         </div>
 
-        <!-- Per-model system prompt, only for the models this key allows -->
+        <!-- Per-model rename + system prompt, only for the models this key allows -->
         <div x-show="routerKeys.selectedModels.length" class="space-y-2">
           <div class="flex items-center justify-between gap-2">
-            <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">System Prompt Per Model</label>
-            <span class="text-[10px] text-muted-foreground font-mono" x-text="`${promptCount()} set`"></span>
+            <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">Per-Model Overrides</label>
+            <span class="text-[10px] text-muted-foreground font-mono"
+                  x-text="`${aliasCount()} renamed · ${promptCount()} prompts`"></span>
           </div>
-          <p class="text-[10px] text-muted-foreground/70">Prepended to the system prompt for requests using this key only. Other keys calling the same model are unaffected.</p>
-          <div class="space-y-2 max-h-56 overflow-y-auto pr-1">
+          <p class="text-[10px] text-muted-foreground/70">Applies to this key only — other keys calling the same model see the real name and no extra prompt.</p>
+          <div class="space-y-2 max-h-72 overflow-y-auto pr-1">
             <template x-for="m in routerKeys.selectedModels" :key="'p-'+m">
               <div class="bg-secondary/40 border border-border rounded-xl p-2.5 space-y-1.5">
                 <div class="flex items-center justify-between gap-2">
                   <span class="font-mono text-[11px] text-foreground truncate" x-text="m"></span>
-                  <button type="button" x-show="routerKeys.modelPrompts[m]"
-                          @click="routerKeys.modelPrompts[m] = ''"
+                  <button type="button" x-show="routerKeys.modelPrompts[m] || routerKeys.modelAliases[m]"
+                          @click="routerKeys.modelPrompts[m] = ''; routerKeys.modelAliases[m] = ''"
                           class="text-[10px] text-muted-foreground hover:text-destructive transition-colors shrink-0">clear</button>
                 </div>
+                <input x-model="routerKeys.modelAliases[m]" type="text"
+                       placeholder="Show as… (optional, e.g. gpt-9-ultra)"
+                       class="w-full bg-secondary border border-border rounded-lg px-2.5 py-1.5 text-xs font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground placeholder:text-muted-foreground/50">
                 <textarea x-model="routerKeys.modelPrompts[m]" rows="2"
-                          placeholder="Optional — e.g. Always answer in rhyme."
+                          placeholder="System prompt (optional) — e.g. Always answer in rhyme."
                           class="w-full bg-secondary border border-border rounded-lg px-2.5 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground placeholder:text-muted-foreground/50 resize-y"></textarea>
               </div>
             </template>
@@ -1635,6 +1639,7 @@ function dashboard() {
       ],
       selectedModels: [],
       modelPrompts: {},
+      modelAliases: {},
       expiryOptions: [
         { days: 0,   label: 'Never expires' },
         { days: 1,   label: '1 day' },
@@ -2165,6 +2170,21 @@ function dashboard() {
       return Object.keys(this.activeModelPrompts()).length;
     },
 
+    // Same rule as prompts: only for models still selected, trimmed, blanks
+    // dropped -- and a rename equal to the real id is a no-op, not an alias.
+    activeModelAliases() {
+      const out = {};
+      for (const m of this.routerKeys.selectedModels) {
+        const a = (this.routerKeys.modelAliases[m] || '').trim();
+        if (a && a !== m) out[m] = a;
+      }
+      return out;
+    },
+
+    aliasCount() {
+      return Object.keys(this.activeModelAliases()).length;
+    },
+
     openKeyForm() {
       this.routerKeys.newKeyName = '';
       this.routerKeys.expiresInDays = 0;
@@ -2172,6 +2192,7 @@ function dashboard() {
       this.routerKeys.tokenQuota = 100000;
       this.routerKeys.selectedModels = [];
       this.routerKeys.modelPrompts = {};
+      this.routerKeys.modelAliases = {};
       this.routerKeys.formOpen = true;
       this.$nextTick(() => lucide.createIcons());
     },
@@ -2235,6 +2256,7 @@ function dashboard() {
             token_quota: this.resolvedQuota(),
             allowed_models: this.routerKeys.selectedModels,
             model_prompts: this.activeModelPrompts(),
+            model_aliases: this.activeModelAliases(),
           })
         });
         // The API explains *why* it refused (prompt too long, prompt for a
@@ -2255,6 +2277,7 @@ function dashboard() {
         this.routerKeys.tokenQuota = 100000;
         this.routerKeys.selectedModels = [];
         this.routerKeys.modelPrompts = {};
+        this.routerKeys.modelAliases = {};
         this.routerKeys.formOpen = false;
         this.toast('Router API key generated! Copy it now - it won\'t be shown again.', 'success');
         this.$nextTick(() => lucide.createIcons());

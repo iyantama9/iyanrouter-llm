@@ -821,7 +821,32 @@ async def api_create_router_key(payload: dict = Body(...), user: None = Depends(
             return JSONResponse(status_code=400, content={"success": False, "message": f"'{model}' has a prompt but isn't in the allowed models"})
         prompts[str(model)] = text
 
-    key = await create_router_api_key(key_name, expires_at, token_quota, allowed_models, json.dumps(prompts))
+    # Optional per-model rename, scoped to this key.
+    aliases_in = payload.get("model_aliases") or {}
+    if not isinstance(aliases_in, dict):
+        return JSONResponse(status_code=400, content={"success": False, "message": "model_aliases must be an object"})
+    aliases, seen = {}, set()
+    for model, alias in aliases_in.items():
+        alias = str(alias or "").strip()
+        if not alias:
+            continue
+        model = str(model)
+        if allowed and model not in allowed:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"'{model}' has a rename but isn't in the allowed models"})
+        if len(alias) > 100:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"Rename for '{model}' is too long (max 100 characters)"})
+        # Two models answering to the same name, or a name that already belongs
+        # to a different real model, would make routing ambiguous.
+        if alias in seen:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"'{alias}' is used as a rename for more than one model"})
+        if alias in aliases_in and alias != model:
+            return JSONResponse(status_code=400, content={"success": False, "message": f"'{alias}' is both a rename and a real model in this key"})
+        seen.add(alias)
+        aliases[model] = alias
+
+    key = await create_router_api_key(
+        key_name, expires_at, token_quota, allowed_models, json.dumps(prompts), json.dumps(aliases)
+    )
     return {"success": True, "key": _json_safe_row(key)}
 
 

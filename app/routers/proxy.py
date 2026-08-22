@@ -110,6 +110,38 @@ def _model_allowed_for_key(request: Request, model: str):
     )
 
 
+def _key_aliases(request: Request) -> dict:
+    """{real model id: alias} configured on the router key making this request."""
+    key_row = _router_key(request)
+    if not key_row:
+        return {}
+    raw = key_row.get("model_aliases")
+    if not raw:
+        return {}
+    try:
+        aliases = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return {}
+    return aliases if isinstance(aliases, dict) else {}
+
+
+def _resolve_alias(request: Request, requested: str):
+    """
+    Map an aliased model name back to the real one.
+
+    Returns (real_model, display_model). display_model is what the caller
+    asked for, so responses can echo the alias back rather than leaking the
+    model actually behind it.
+    """
+    aliases = _key_aliases(request)
+    if not aliases:
+        return requested, requested
+    for real, alias in aliases.items():
+        if alias == requested:
+            return real, alias
+    return requested, aliases.get(requested, requested)
+
+
 def _key_model_prompt(request: Request, model: str) -> str:
     """
     The per-model system prompt configured on the router key making this
@@ -480,6 +512,18 @@ async def list_models(request: Request):
         for m in info.get("models") or []:
             models.append(f"{prefix}/{m}")
 
+    # A key with a model allowlist should only see what it can actually call,
+    # and aliased models are advertised under their new name.
+    key_row = _router_key(request)
+    if key_row:
+        allowed_raw = (key_row.get("allowed_models") or "").strip()
+        if allowed_raw:
+            allowed = {m.strip() for m in allowed_raw.split(",") if m.strip()}
+            models = [m for m in models if m in allowed]
+        aliases = _key_aliases(request)
+        if aliases:
+            models = [aliases.get(m, m) for m in models]
+
     data = []
     for m in models:
         data.append({
@@ -507,7 +551,11 @@ async def messages(request: Request):
 
     # Custom (admin-added) providers get a self-contained dispatch path,
     # short-circuiting before any of the built-in routing/brain logic below.
-    requested_model_raw = payload.get("model", "") or ""
+    # An aliased name has to become the real model before anything routes on
+    # it; display_model is what the response will claim to be.
+    requested_model_raw, display_model = _resolve_alias(request, payload.get("model", "") or "")
+    payload["model"] = requested_model_raw
+
     denied = _model_allowed_for_key(request, requested_model_raw)
     if denied:
         return JSONResponse(status_code=403, content={"error": {"message": denied}})
@@ -523,6 +571,9 @@ async def messages(request: Request):
             start_req_time = time.time()
             kind, status, body = await _dispatch_custom_provider(cprefix, payload, want_stream)
             log_model = f"{cprefix}/{payload['model']}"
+            # Echo the alias back rather than the real model id.
+            if kind == "json" and isinstance(body, dict) and body.get("model"):
+                body["model"] = display_model
             elapsed_ms = int((time.time() - start_req_time) * 1000)
             if kind == "stream":
                 async def _wrapped():
@@ -722,6 +773,10 @@ async def messages(request: Request):
         upstream_base_url = DEFAULT_UPSTREAM_URL
         log_model = f"kc/{payload['model']}"
 
+    # What the response claims to be. Logs and routing stats keep using
+    # log_model so the dashboard still shows the model that actually ran.
+    display_log_model = display_model if display_model != requested_model_raw else log_model
+
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
     upstream_req = build_openai_request(payload, provider=provider, session_history=session_history)
     upstream_endpoint = f"{upstream_base_url}/chat/completions"
@@ -790,7 +845,7 @@ async def messages(request: Request):
                 data = {"error": {"message": resp.text or f"HTTP {resp.status_code}"}}
 
             if resp.status_code == 200:
-                result = _qwen_image_response(data, log_model, msg_id)
+                result = _qwen_image_response(data, display_log_model, msg_id)
                 total_ms = int((time.time() - start_req_time) * 1000)
                 add_request_log(log_model, 200, current_key, False, total_ms, input_tokens, 0)
                 await _bill_router_key(request, input_tokens)
@@ -955,7 +1010,7 @@ async def messages(request: Request):
                                     return
 
                                 token_tracker = {"output_tokens": 0}
-                                async for chunk in stream_as_anthropic(resp, log_model, msg_id, input_tokens, token_tracker):
+                                async for chunk in stream_as_anthropic(resp, display_log_model, msg_id, input_tokens, token_tracker):
                                     has_yielded = True
                                     if first_token_time is None:
                                         first_token_time = time.time()
@@ -1225,7 +1280,7 @@ async def messages(request: Request):
                     add_request_log(log_model, resp.status_code, current_key, rotated_occurred, int((time.time() - start_req_time) * 1000))
                     return JSONResponse(status_code=resp.status_code, content=err_json)
                 openai_resp = resp.json()
-                anthropic_resp = to_anthropic_response(openai_resp, log_model, msg_id)
+                anthropic_resp = to_anthropic_response(openai_resp, display_log_model, msg_id)
                 usage = anthropic_resp.get("usage", {})
                 output_tokens = usage.get("output_tokens", 0)
                 cached_tokens = _extract_cached_tokens(openai_resp)
@@ -1412,7 +1467,8 @@ async def chat_completions(request: Request):
         return JSONResponse(status_code=400, content={"error": {"message": f"Invalid JSON: {str(e)}"}})
 
     payload = dict(openai_payload)
-    requested_model = payload.get("model") or "cv/gpt-5.4-mini"
+    requested_model, display_model = _resolve_alias(request, payload.get("model") or "cv/gpt-5.4-mini")
+    payload["model"] = requested_model
     print(f"[CHAT-COMPLETIONS] Model: {requested_model}, stream: {payload.get('stream')}", flush=True)
 
     denied = _model_allowed_for_key(request, requested_model)
@@ -1448,7 +1504,7 @@ async def chat_completions(request: Request):
             if status != 200:
                 return JSONResponse(status_code=status, content=body)
             if kind == "json":
-                return JSONResponse(content=anthropic_to_openai_response(body, requested_model))
+                return JSONResponse(content=anthropic_to_openai_response(body, display_model))
 
             async def _relay_openai_stream():
                 # `body` yields either whole SSE-event strings (upstream was
@@ -1760,6 +1816,10 @@ async def chat_completions(request: Request):
                 add_request_log(requested_model, 200, current_key, False, int((time.time() - start_req_time) * 1000))
                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                 await sse_broadcaster.broadcast("status", await _build_status_dict())
+                # Upstream reports its own model name; swap in the alias so the
+                # rename is consistent with what /v1/models advertised.
+                if isinstance(content, dict) and content.get("model"):
+                    content["model"] = display_model
                 return JSONResponse(content)
 
             last_status = effective_status

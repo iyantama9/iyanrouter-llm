@@ -335,6 +335,10 @@ async def setup_tables():
     # authenticated with this key -- the same model called with any other key
     # (or the router password) is untouched.
     await execute("ALTER TABLE router_api_keys ADD COLUMN IF NOT EXISTS model_prompts TEXT NOT NULL DEFAULT '{}'")
+    # JSON object of {real model id: name shown to this key}. Renames the model
+    # in /v1/models and in responses, and lets requests address it by the new
+    # name -- again only for this key.
+    await execute("ALTER TABLE router_api_keys ADD COLUMN IF NOT EXISTS model_aliases TEXT NOT NULL DEFAULT '{}'")
 
     # ── Custom (admin-added) providers ──
     await execute("""
@@ -452,21 +456,21 @@ async def cleanup_old_sessions(retention_days: int = 30):
     )
 
 # ── Router API Key Helpers ──
-async def create_router_api_key(key_name: str, expires_at=None, token_quota: int = 0, allowed_models: str = "", model_prompts: str = "{}"):
+async def create_router_api_key(key_name: str, expires_at=None, token_quota: int = 0, allowed_models: str = "", model_prompts: str = "{}", model_aliases: str = "{}"):
     """Generate a new router API key, optionally scoped by expiry/quota/models."""
     import secrets
     key_value = f"rtr_{secrets.token_urlsafe(32)}"
     return await fetchrow(
-        """INSERT INTO router_api_keys (key_value, key_name, expires_at, token_quota, allowed_models, model_prompts)
-           VALUES ($1, $2, $3, $4, $5, $6) RETURNING *""",
-        key_value, key_name, expires_at, token_quota, allowed_models, model_prompts
+        """INSERT INTO router_api_keys (key_value, key_name, expires_at, token_quota, allowed_models, model_prompts, model_aliases)
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *""",
+        key_value, key_name, expires_at, token_quota, allowed_models, model_prompts, model_aliases
     )
 
 async def get_router_api_keys():
     """Get all router API keys with their limits and usage."""
     return await fetch(
         """SELECT id, key_name, created_at, last_used_at, is_active,
-                  expires_at, token_quota, tokens_used, allowed_models, model_prompts
+                  expires_at, token_quota, tokens_used, allowed_models, model_prompts, model_aliases
            FROM router_api_keys ORDER BY created_at DESC"""
     )
 
@@ -478,7 +482,7 @@ async def verify_router_api_key(key_value: str):
     allowlist and attribute token usage back to this key.
     """
     key = await fetchrow(
-        """SELECT id, token_quota, tokens_used, allowed_models, model_prompts, expires_at
+        """SELECT id, token_quota, tokens_used, allowed_models, model_prompts, model_aliases, expires_at
            FROM router_api_keys
            WHERE key_value = $1
              AND is_active = TRUE
