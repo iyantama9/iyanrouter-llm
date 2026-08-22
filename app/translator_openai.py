@@ -169,7 +169,7 @@ def anthropic_to_openai_response(anthropic_response: Dict, model: str) -> Dict:
     }
 
 
-def anthropic_to_openai_stream_chunk(chunk_data: Dict, model: str, chunk_index: int = 0) -> Optional[str]:
+def anthropic_to_openai_stream_chunk(chunk_data: Dict, model: str) -> Optional[str]:
     """
     Convert Anthropic SSE chunk to OpenAI format.
     Returns formatted SSE line or None if not a content chunk.
@@ -200,7 +200,7 @@ def anthropic_to_openai_stream_chunk(chunk_data: Dict, model: str, chunk_index: 
             chunk = {
                 "id": f"chatcmpl-{uuid.uuid4().hex[:28]}",
                 "object": "chat.completion.chunk",
-                "created": chunk_index,
+                "created": _created_timestamp(),
                 "model": model,
                 "choices": [{
                     "index": 0,
@@ -217,7 +217,7 @@ def anthropic_to_openai_stream_chunk(chunk_data: Dict, model: str, chunk_index: 
             chunk = {
                 "id": f"chatcmpl-{uuid.uuid4().hex[:28]}",
                 "object": "chat.completion.chunk",
-                "created": chunk_index,
+                "created": _created_timestamp(),
                 "model": model,
                 "choices": [{
                     "index": 0,
@@ -228,7 +228,9 @@ def anthropic_to_openai_stream_chunk(chunk_data: Dict, model: str, chunk_index: 
             return f"data: {json.dumps(chunk)}\n\n"
 
     elif event_type == "message_stop":
-        return "data: [DONE]\n\n"
+        # The caller closes the stream with its own [DONE]; emitting one here
+        # too put two of them on the wire.
+        return None
 
     return None
 

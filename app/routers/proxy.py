@@ -1552,7 +1552,6 @@ async def chat_completions(request: Request):
                 # or raw, possibly-partial byte chunks (upstream was
                 # anthropic-format, relayed as-is) -- buffer defensively so
                 # a line split across two chunks doesn't get silently dropped.
-                idx = 0
                 buffer = ""
                 async for chunk in body:
                     text = chunk if isinstance(chunk, str) else chunk.decode(errors="ignore")
@@ -1570,8 +1569,7 @@ async def chat_completions(request: Request):
                             chunk_data = json.loads(data_str)
                         except Exception:
                             continue
-                        out = anthropic_to_openai_stream_chunk(chunk_data, display_model, idx)
-                        idx += 1
+                        out = anthropic_to_openai_stream_chunk(chunk_data, display_model)
                         if out:
                             yield out.encode()
                 yield b"data: [DONE]\n\n"
