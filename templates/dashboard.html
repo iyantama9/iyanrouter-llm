@@ -352,10 +352,16 @@
                       <span class="text-xs text-muted-foreground" x-text="k.last_used_at ? new Date(k.last_used_at).toLocaleString() : 'Never'"></span>
                     </td>
                     <td class="px-4 py-3 text-right">
-                      <button @click="deleteRouterKey(k.id)"
-                              class="px-3 py-1.5 rounded-xl text-[11px] font-medium transition-colors hover:bg-destructive/8 text-destructive/70 hover:text-destructive border border-destructive/15 hover:border-destructive/30">
-                        Delete
-                      </button>
+                      <div class="flex items-center justify-end gap-2">
+                        <button @click="openKeyForm(k)"
+                                class="px-3 py-1.5 rounded-xl text-[11px] font-medium transition-colors hover:bg-secondary text-muted-foreground hover:text-foreground border border-border">
+                          Edit
+                        </button>
+                        <button @click="deleteRouterKey(k.id)"
+                                class="px-3 py-1.5 rounded-xl text-[11px] font-medium transition-colors hover:bg-destructive/8 text-destructive/70 hover:text-destructive border border-destructive/15 hover:border-destructive/30">
+                          Delete
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 </template>
@@ -1380,7 +1386,8 @@
     <div class="absolute inset-0" @click="routerKeys.formOpen = false"></div>
     <div class="relative w-full max-w-lg max-h-[88vh] overflow-y-auto bg-card border border-border rounded-2xl shadow-2xl">
       <div class="px-5 py-4 border-b border-border flex items-center justify-between gap-4 sticky top-0 bg-card z-10">
-        <h3 class="font-display text-lg font-700 tracking-wide text-foreground">Generate Router API Key</h3>
+        <h3 class="font-display text-lg font-700 tracking-wide text-foreground"
+            x-text="routerKeys.editingId ? 'Edit Router API Key' : 'Generate Router API Key'"></h3>
         <button @click="routerKeys.formOpen = false"
                 class="p-2 rounded-xl text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors shrink-0">
           <i data-lucide="x" class="w-4 h-4"></i>
@@ -1438,6 +1445,11 @@
                  type="number" min="1" step="any" placeholder="Tokens"
                  class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground placeholder:text-muted-foreground/50">
           <p class="text-[10px] text-muted-foreground/70">Counted by this router (input + output), not provider billing.</p>
+          <label x-show="routerKeys.editingId" class="flex items-center gap-2 pt-1 cursor-pointer">
+            <input type="checkbox" x-model="routerKeys.resetUsage" class="rounded border-border accent-primary">
+            <span class="text-[10px] text-muted-foreground"
+                  x-text="`Reset tokens used back to 0 (currently ${compactNumber(routerKeys.usedTokens)})`"></span>
+          </label>
         </div>
 
         <div class="space-y-1.5">
@@ -1482,7 +1494,9 @@
                 class="w-full bg-primary text-primary-foreground font-600 px-4 py-2.5 rounded-xl text-sm hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2">
           <i data-lucide="key" class="w-4 h-4" x-show="!routerKeys.generating"></i>
           <i data-lucide="loader-2" class="w-4 h-4 animate-spin" x-show="routerKeys.generating"></i>
-          <span x-text="routerKeys.generating ? 'Generating…' : 'Generate Key'"></span>
+          <span x-text="routerKeys.generating
+                          ? (routerKeys.editingId ? 'Saving…' : 'Generating…')
+                          : (routerKeys.editingId ? 'Save Changes' : 'Generate Key')"></span>
         </button>
       </form>
     </div>
@@ -1641,6 +1655,10 @@ function dashboard() {
       selectedModels: [],
       modelPrompts: {},
       modelAliases: {},
+      editingId: null,
+      resetUsage: false,
+      usedTokens: 0,
+      keepExpiry: false,
       expiryOptions: [
         { days: 0,   label: 'Never expires' },
         { days: 1,   label: '1 day' },
@@ -2186,16 +2204,47 @@ function dashboard() {
       return Object.keys(this.activeModelAliases()).length;
     },
 
-    openKeyForm() {
-      this.routerKeys.newKeyName = '';
-      this.routerKeys.expiresInDays = 0;
-      this.routerKeys.quotaPreset = 'unlimited';
-      this.routerKeys.tokenQuota = 100000;
-      this.routerKeys.selectedModels = [];
-      this.routerKeys.modelPrompts = {};
-      this.routerKeys.modelAliases = {};
-      this.routerKeys.formOpen = true;
+    // Doubles as the edit form: pass an existing key row to prefill it.
+    async openKeyForm(row) {
+      const rk = this.routerKeys;
+      rk.editingId = row ? row.id : null;
+      rk.resetUsage = false;
+      rk.usedTokens = row ? (row.tokens_used || 0) : 0;
+      rk.newKeyName = row ? (row.key_name || '') : '';
+
+      if (row) {
+        // The stored expiry is an absolute date; the form works in "valid
+        // for N days". Re-submitting an unchanged value would silently push
+        // the expiry forward, so an untouched picker means "leave it alone".
+        rk.keepExpiry = true;
+        rk.expiresInDays = 0;
+        const quota = Number(row.token_quota || 0);
+        const preset = rk.quotaOptions.find(o => o.value === quota);
+        rk.quotaPreset = quota === 0 ? 'unlimited' : (preset ? preset.value : 'custom');
+        rk.tokenQuota = quota || 100000;
+        rk.selectedModels = (row.allowed_models || '').split(',').map(m => m.trim()).filter(Boolean);
+        rk.modelPrompts = this.parseKeyJson(row.model_prompts);
+        rk.modelAliases = this.parseKeyJson(row.model_aliases);
+        // The picker needs the model catalogue to render the current selection.
+        if (!this.models.loaded) this.fetchModels();
+      } else {
+        rk.keepExpiry = false;
+        rk.expiresInDays = 0;
+        rk.quotaPreset = 'unlimited';
+        rk.tokenQuota = 100000;
+        rk.selectedModels = [];
+        rk.modelPrompts = {};
+        rk.modelAliases = {};
+      }
+      rk.formOpen = true;
       this.$nextTick(() => lucide.createIcons());
+    },
+
+    parseKeyJson(raw) {
+      if (!raw) return {};
+      if (typeof raw === 'object') return { ...raw };
+      try { const v = JSON.parse(raw); return (v && typeof v === 'object') ? v : {}; }
+      catch { return {}; }
     },
 
     async openModelPicker() {
@@ -2245,17 +2294,22 @@ function dashboard() {
     },
 
     async generateRouterKey() {
-      if (!this.routerKeys.newKeyName.trim()) return;
-      this.routerKeys.generating = true;
+      const rk = this.routerKeys;
+      if (!rk.newKeyName.trim()) return;
+      const editing = rk.editingId !== null;
+      rk.generating = true;
       try {
-        const r = await fetch('/api/router-keys', {
-          method: 'POST',
+        const r = await fetch(editing ? `/api/router-keys/${rk.editingId}` : '/api/router-keys', {
+          method: editing ? 'PUT' : 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            key_name: this.routerKeys.newKeyName,
-            expires_in_days: this.routerKeys.expiresInDays || 0,
+            key_name: rk.newKeyName,
+            expires_in_days: rk.expiresInDays || 0,
+            // Only send a new expiry when the picker was actually touched.
+            keep_expiry: editing && rk.keepExpiry && !rk.expiresInDays,
+            reset_usage: editing && rk.resetUsage,
             token_quota: this.resolvedQuota(),
-            allowed_models: this.routerKeys.selectedModels,
+            allowed_models: rk.selectedModels,
             model_prompts: this.activeModelPrompts(),
             model_aliases: this.activeModelAliases(),
           })
@@ -2266,24 +2320,33 @@ function dashboard() {
         // only clue. A success:false with a 200 status fell through silently.
         const d = await r.json().catch(() => null);
         if (!r.ok || !d || !d.success) {
-          this.toast(d?.message || `Failed to generate key (HTTP ${r.status})`, 'error');
+          this.toast(d?.message || `Failed to ${editing ? 'save' : 'generate'} key (HTTP ${r.status})`, 'error');
           return;
         }
-        // Show full key only once
-        d.key.key_value_display = d.key.key_value;
-        this.routerKeys.keys.unshift(d.key);
-        this.routerKeys.newKeyName = '';
-        this.routerKeys.expiresInDays = 0;
-        this.routerKeys.quotaPreset = 'unlimited';
-        this.routerKeys.tokenQuota = 100000;
-        this.routerKeys.selectedModels = [];
-        this.routerKeys.modelPrompts = {};
-        this.routerKeys.modelAliases = {};
-        this.routerKeys.formOpen = false;
-        this.toast('Router API key generated! Copy it now - it won\'t be shown again.', 'success');
+        if (editing) {
+          // The secret is unchanged, so whoever holds it keeps working.
+          rk.formOpen = false;
+          rk.editingId = null;
+          this.toast('Key updated', 'success');
+          this.fetchRouterKeys();
+        } else {
+          // Show full key only once
+          d.key.key_value_display = d.key.key_value;
+          rk.keys.unshift(d.key);
+          rk.formOpen = false;
+          this.toast("Router API key generated! Copy it now - it won't be shown again.", 'success');
+        }
+        rk.newKeyName = '';
+        rk.expiresInDays = 0;
+        rk.quotaPreset = 'unlimited';
+        rk.tokenQuota = 100000;
+        rk.selectedModels = [];
+        rk.modelPrompts = {};
+        rk.modelAliases = {};
+        rk.resetUsage = false;
         this.$nextTick(() => lucide.createIcons());
       } catch (e) {
-        this.toast('Network error while generating key', 'error');
+        this.toast(`Network error while ${editing ? 'saving' : 'generating'} key`, 'error');
       } finally {
         this.routerKeys.generating = false;
       }

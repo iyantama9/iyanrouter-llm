@@ -19,7 +19,10 @@ from app.config import (
     SESSION_SECRET, ADMIN_USERNAME, verify_admin_password, get_paginated_logs,
 )
 from app.sse import sse_broadcaster
-from app.database import fetch, fetch_one, create_router_api_key, get_router_api_keys, delete_router_api_key
+from app.database import (
+    fetch, fetch_one, create_router_api_key, get_router_api_keys, delete_router_api_key,
+    update_router_api_key, reset_router_key_usage,
+)
 
 
 router = APIRouter()
@@ -776,55 +779,56 @@ async def api_get_router_keys(user: None = Depends(require_auth)):
     return {"keys": [_json_safe_row(k) for k in keys]}
 
 
-@router.post("/api/router-keys")
-async def api_create_router_key(payload: dict = Body(...), user: None = Depends(require_auth)):
-    """Generate a new router API key."""
+class _KeySettingsError(Exception):
+    """Raised when a key's settings don't validate; message goes to the client."""
+
+
+def _parse_key_settings(payload: dict):
+    """
+    Validate the tunable parts of a router key. Shared by create and update so
+    an edited key can't end up in a state the create endpoint would refuse.
+    """
     import datetime
 
-    key_name = payload.get("key_name", "").strip()
-    if not key_name:
-        return JSONResponse(status_code=400, content={"success": False, "message": "Key name is required"})
-
-    # 0 / omitted means "never expires" and "no quota", matching how existing
-    # keys behave so nothing changes for them.
     try:
         expires_in_days = int(payload.get("expires_in_days") or 0)
         token_quota = int(payload.get("token_quota") or 0)
     except (TypeError, ValueError):
-        return JSONResponse(status_code=400, content={"success": False, "message": "expires_in_days and token_quota must be numbers"})
+        raise _KeySettingsError("expires_in_days and token_quota must be numbers")
     if expires_in_days < 0 or token_quota < 0:
-        return JSONResponse(status_code=400, content={"success": False, "message": "expires_in_days and token_quota cannot be negative"})
+        raise _KeySettingsError("expires_in_days and token_quota cannot be negative")
 
+    # 0 / omitted means "never expires" and "no quota", matching how existing
+    # keys behave so nothing changes for them.
     expires_at = None
     if expires_in_days > 0:
         expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=expires_in_days)
 
     models = payload.get("allowed_models") or []
     if not isinstance(models, list):
-        return JSONResponse(status_code=400, content={"success": False, "message": "allowed_models must be a list"})
+        raise _KeySettingsError("allowed_models must be a list")
     allowed = sorted({str(m).strip() for m in models if str(m).strip()})
-    allowed_models = ",".join(allowed)
 
     # Optional per-model system prompt, scoped to this key only.
     prompts_in = payload.get("model_prompts") or {}
     if not isinstance(prompts_in, dict):
-        return JSONResponse(status_code=400, content={"success": False, "message": "model_prompts must be an object"})
+        raise _KeySettingsError("model_prompts must be an object")
     prompts = {}
     for model, text in prompts_in.items():
         text = str(text or "").strip()
         if not text:
             continue
         if len(text) > 8000:
-            return JSONResponse(status_code=400, content={"success": False, "message": f"Prompt for '{model}' is too long (max 8000 characters)"})
+            raise _KeySettingsError(f"Prompt for '{model}' is too long (max 8000 characters)")
         # A prompt for a model the key can't call would silently never fire.
         if allowed and str(model) not in allowed:
-            return JSONResponse(status_code=400, content={"success": False, "message": f"'{model}' has a prompt but isn't in the allowed models"})
+            raise _KeySettingsError(f"'{model}' has a prompt but isn't in the allowed models")
         prompts[str(model)] = text
 
     # Optional per-model rename, scoped to this key.
     aliases_in = payload.get("model_aliases") or {}
     if not isinstance(aliases_in, dict):
-        return JSONResponse(status_code=400, content={"success": False, "message": "model_aliases must be an object"})
+        raise _KeySettingsError("model_aliases must be an object")
     aliases, seen = {}, set()
     for model, alias in aliases_in.items():
         alias = str(alias or "").strip()
@@ -832,22 +836,74 @@ async def api_create_router_key(payload: dict = Body(...), user: None = Depends(
             continue
         model = str(model)
         if allowed and model not in allowed:
-            return JSONResponse(status_code=400, content={"success": False, "message": f"'{model}' has a rename but isn't in the allowed models"})
+            raise _KeySettingsError(f"'{model}' has a rename but isn't in the allowed models")
         if len(alias) > 100:
-            return JSONResponse(status_code=400, content={"success": False, "message": f"Rename for '{model}' is too long (max 100 characters)"})
+            raise _KeySettingsError(f"Rename for '{model}' is too long (max 100 characters)")
         # Two models answering to the same name, or a name that already belongs
         # to a different real model, would make routing ambiguous.
         if alias in seen:
-            return JSONResponse(status_code=400, content={"success": False, "message": f"'{alias}' is used as a rename for more than one model"})
+            raise _KeySettingsError(f"'{alias}' is used as a rename for more than one model")
         if alias in aliases_in and alias != model:
-            return JSONResponse(status_code=400, content={"success": False, "message": f"'{alias}' is both a rename and a real model in this key"})
+            raise _KeySettingsError(f"'{alias}' is both a rename and a real model in this key")
         seen.add(alias)
         aliases[model] = alias
 
+    return {
+        "expires_at": expires_at,
+        "expires_in_days": expires_in_days,
+        "token_quota": token_quota,
+        "allowed_models": ",".join(allowed),
+        "model_prompts": json.dumps(prompts),
+        "model_aliases": json.dumps(aliases),
+    }
+
+
+@router.post("/api/router-keys")
+async def api_create_router_key(payload: dict = Body(...), user: None = Depends(require_auth)):
+    """Generate a new router API key."""
+    key_name = payload.get("key_name", "").strip()
+    if not key_name:
+        return JSONResponse(status_code=400, content={"success": False, "message": "Key name is required"})
+    try:
+        s = _parse_key_settings(payload)
+    except _KeySettingsError as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
     key = await create_router_api_key(
-        key_name, expires_at, token_quota, allowed_models, json.dumps(prompts), json.dumps(aliases)
+        key_name, s["expires_at"], s["token_quota"],
+        s["allowed_models"], s["model_prompts"], s["model_aliases"],
     )
     return {"success": True, "key": _json_safe_row(key)}
+
+
+@router.put("/api/router-keys/{key_id}")
+async def api_update_router_key(key_id: int, payload: dict = Body(...), user: None = Depends(require_auth)):
+    """
+    Edit an existing key's settings in place.
+
+    The secret itself never changes, so whoever already holds it keeps
+    working -- only what the key is allowed to do changes.
+    """
+    key_name = payload.get("key_name", "").strip()
+    if not key_name:
+        return JSONResponse(status_code=400, content={"success": False, "message": "Key name is required"})
+    try:
+        s = _parse_key_settings(payload)
+    except _KeySettingsError as e:
+        return JSONResponse(status_code=400, content={"success": False, "message": str(e)})
+
+    # An untouched expiry ("keep as-is") must not silently become "never".
+    keep_expiry = payload.get("keep_expiry") is True
+    updated = await update_router_api_key(
+        key_id, key_name, s["expires_at"], s["token_quota"],
+        s["allowed_models"], s["model_prompts"], s["model_aliases"],
+        keep_expiry=keep_expiry,
+    )
+    if not updated:
+        return JSONResponse(status_code=404, content={"success": False, "message": "Key not found"})
+    if payload.get("reset_usage") is True:
+        updated = await reset_router_key_usage(key_id)
+    return {"success": True, "key": _json_safe_row(updated)}
 
 
 @router.delete("/api/router-keys/{key_id}")

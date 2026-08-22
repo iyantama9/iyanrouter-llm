@@ -495,6 +495,35 @@ async def verify_router_api_key(key_value: str):
     await execute("UPDATE router_api_keys SET last_used_at = NOW() WHERE id = $1", key["id"])
     return dict(key)
 
+async def update_router_api_key(key_id: int, key_name: str, expires_at, token_quota: int,
+                                allowed_models: str, model_prompts: str, model_aliases: str,
+                                keep_expiry: bool = False):
+    """
+    Update a key's settings in place. The secret is never touched, so anyone
+    already using the key keeps working with the new rules applied.
+    """
+    if keep_expiry:
+        return await fetchrow(
+            """UPDATE router_api_keys
+               SET key_name = $2, token_quota = $3, allowed_models = $4,
+                   model_prompts = $5, model_aliases = $6
+               WHERE id = $1 RETURNING *""",
+            key_id, key_name, token_quota, allowed_models, model_prompts, model_aliases
+        )
+    return await fetchrow(
+        """UPDATE router_api_keys
+           SET key_name = $2, expires_at = $3, token_quota = $4, allowed_models = $5,
+               model_prompts = $6, model_aliases = $7
+           WHERE id = $1 RETURNING *""",
+        key_id, key_name, expires_at, token_quota, allowed_models, model_prompts, model_aliases
+    )
+
+async def reset_router_key_usage(key_id: int):
+    """Put a key's consumed tokens back to zero (e.g. after raising its quota)."""
+    return await fetchrow(
+        "UPDATE router_api_keys SET tokens_used = 0 WHERE id = $1 RETURNING *", key_id
+    )
+
 async def add_router_key_token_usage(key_id: int, tokens: int):
     """Bill tokens against a router key's quota."""
     if not key_id or tokens <= 0:
