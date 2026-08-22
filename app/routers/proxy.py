@@ -274,7 +274,7 @@ def _extract_cached_tokens(openai_resp: dict) -> int:
     return 0
 
 
-async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool):
+async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool, display_model: str = None):
     """
     Send an Anthropic-shaped request to an admin-added custom provider and
     return an Anthropic-shaped result, regardless of whether that provider
@@ -300,6 +300,10 @@ async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool):
     api_format = info["api_format"]
     msg_id = f"msg_{uuid.uuid4().hex[:24]}"
     model = payload.get("model", "")
+    # What the response should claim to be. Differs from `model` only when the
+    # caller's key renames it; without this the real id leaks out through
+    # message_start on the streaming path.
+    shown_model = display_model or model
 
     last_status, last_body = 502, {"error": {"message": "All configured keys for this provider failed."}}
 
@@ -353,7 +357,7 @@ async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool):
                     async with httpx.AsyncClient(timeout=300) as client:
                         resp = await client.post(url, headers=headers, json=upstream_payload)
                     if resp.status_code == 200:
-                        anthropic_resp = to_anthropic_response(resp.json(), model, msg_id)
+                        anthropic_resp = to_anthropic_response(resp.json(), shown_model, msg_id)
                         return "json", 200, anthropic_resp
                     try:
                         body = resp.json()
@@ -367,7 +371,7 @@ async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool):
                     if resp.status_code == 200:
                         async def _relay():
                             try:
-                                async for chunk in stream_as_anthropic(resp, model, msg_id):
+                                async for chunk in stream_as_anthropic(resp, shown_model, msg_id):
                                     yield chunk
                             finally:
                                 await resp.aclose()
@@ -569,7 +573,7 @@ async def messages(request: Request):
             payload["model"] = requested_model_raw[len(cprefix) + 1:]
             want_stream = bool(payload.get("stream"))
             start_req_time = time.time()
-            kind, status, body = await _dispatch_custom_provider(cprefix, payload, want_stream)
+            kind, status, body = await _dispatch_custom_provider(cprefix, payload, want_stream, display_model)
             log_model = f"{cprefix}/{payload['model']}"
             # Echo the alias back rather than the real model id.
             if kind == "json" and isinstance(body, dict) and body.get("model"):
@@ -1490,7 +1494,7 @@ async def chat_completions(request: Request):
                 anthropic_payload["system"] = system_prompt
             want_stream = bool(payload.get("stream"))
             start_req_time = time.time()
-            kind, status, body = await _dispatch_custom_provider(cprefix, anthropic_payload, want_stream)
+            kind, status, body = await _dispatch_custom_provider(cprefix, anthropic_payload, want_stream, display_model)
             log_model = f"{cprefix}/{model_name}"
             usage = (body or {}).get("usage") or {} if kind == "json" else {}
             add_request_log(
@@ -1530,7 +1534,7 @@ async def chat_completions(request: Request):
                             chunk_data = json.loads(data_str)
                         except Exception:
                             continue
-                        out = anthropic_to_openai_stream_chunk(chunk_data, requested_model, idx)
+                        out = anthropic_to_openai_stream_chunk(chunk_data, display_model, idx)
                         idx += 1
                         if out:
                             yield out.encode()
