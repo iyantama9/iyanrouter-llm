@@ -431,7 +431,7 @@
         <!-- Add key form -->
         <div class="p-5 bg-card border border-border rounded-2xl">
           <p class="text-[9px] font-600 text-muted-foreground/60 uppercase tracking-[0.14em] font-mono mb-4">Add Provider Key</p>
-          <form @submit.prevent="addKey" class="flex gap-2">
+          <form @submit.prevent="addKey" novalidate class="flex gap-2">
             <div class="relative w-44 shrink-0" x-data="{ open: false }" @click.outside="open = false">
               <button type="button" @click="open = !open"
                       class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground flex items-center justify-between gap-2">
@@ -689,7 +689,7 @@
                 </div>
               </template>
 
-              <form @submit.prevent="sendPlaygroundChat" class="flex gap-2 items-end">
+              <form @submit.prevent="sendPlaygroundChat" novalidate class="flex gap-2 items-end">
                 <button type="button" @click="$refs.fileInput.click()"
                         class="h-[44px] w-[44px] shrink-0 flex items-center justify-center bg-secondary border border-border rounded-xl text-muted-foreground hover:text-foreground hover:bg-secondary/80 transition-colors">
                   <i data-lucide="paperclip" class="w-4 h-4"></i>
@@ -1319,7 +1319,7 @@
         </button>
       </div>
 
-      <form @submit.prevent="addProvider" class="p-5 space-y-3.5">
+      <form @submit.prevent="addProvider" novalidate class="p-5 space-y-3.5">
         <div class="space-y-1.5">
           <label class="text-[10px] font-600 text-muted-foreground/70 uppercase tracking-[0.1em] font-mono">Display Name</label>
           <input x-model="providerMgmt.newProvider.name" type="text" placeholder="e.g. GetCore"
@@ -1387,7 +1387,7 @@
         </button>
       </div>
 
-      <form @submit.prevent="generateRouterKey" class="p-5 space-y-4">
+      <form @submit.prevent="generateRouterKey" novalidate class="p-5 space-y-4">
         <div class="space-y-1.5">
           <label class="text-[10px] font-600 text-muted-foreground uppercase tracking-[0.1em] font-mono">Key Name</label>
           <input x-model="routerKeys.newKeyName" type="text" placeholder="e.g. Production, Mobile app"
@@ -1434,7 +1434,8 @@
             </div>
           </div>
           <input x-show="routerKeys.quotaPreset === 'custom'" x-model.number="routerKeys.tokenQuota"
-                 type="number" min="1" step="1000" placeholder="Tokens"
+                 :disabled="routerKeys.quotaPreset !== 'custom'"
+                 type="number" min="1" step="any" placeholder="Tokens"
                  class="w-full bg-secondary border border-border rounded-xl px-3 py-2 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-primary/40 text-foreground placeholder:text-muted-foreground/50">
           <p class="text-[10px] text-muted-foreground/70">Counted by this router (input + output), not provider billing.</p>
         </div>
