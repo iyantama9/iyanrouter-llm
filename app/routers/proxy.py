@@ -10,10 +10,10 @@ import httpx
 
 import app.config as config_module
 from app.config import (
-    DEFAULT_UPSTREAM_URL, CAVOTI_API_KEY, CAVOTI_BASE_URL, BLUESMINDS_API_KEY, BLUESMINDS_BASE_URL,
-    ROUTER_PASSWORD, get_current_key, rotate_key, API_KEYS, NARA_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL, ATOMESUS_BASE_URL, WEIZE_BASE_URL,
-    resolve_dahl_model, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS, WEIZE_API_KEYS,
-    get_current_cv_key, rotate_cv_key, get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key, get_current_dahl_key, rotate_dahl_key, get_current_qc_key, rotate_qc_key, get_current_marketku_key, rotate_marketku_key, get_current_atomesus_key, rotate_atomesus_key, get_current_weize_key, rotate_weize_key,
+    DEFAULT_UPSTREAM_URL, BLUESMINDS_API_KEY, BLUESMINDS_BASE_URL,
+    ROUTER_PASSWORD, NARA_BASE_URL, DAHL_BASE_URL, QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL,
+    resolve_dahl_model, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS,
+    get_current_bm_key, rotate_bm_key, get_current_nr_key, rotate_nr_key, get_current_dahl_key, rotate_dahl_key, get_current_qc_key, rotate_qc_key, get_current_marketku_key, rotate_marketku_key,
     get_current_qc_key_for_model, rotate_qc_key_for_model, mark_qc_model_exhausted, QC_FALLBACK_ORDER,
     recent_requests, add_request_log,
 )
@@ -521,12 +521,6 @@ async def list_models(request: Request):
 
     models = []
     disabled = config_module.DISABLED_PROVIDERS
-    if "kc" not in disabled:
-        for m in config_module.KIMCHI_MODELS:
-            models.append(f"kc/{m}")
-    if "cv" not in disabled:
-        for m in config_module.CAVOTI_MODELS:
-            models.append(f"cv/{m}")
     if "bm" not in disabled:
         for m in config_module.BLUESMINDS_MODELS:
             models.append(f"bm/{m}")
@@ -542,12 +536,6 @@ async def list_models(request: Request):
     if "marketku" not in disabled:
         for m in config_module.MARKETKU_MODELS:
             models.append(f"mk/{m}")
-    if "atomesus" not in disabled:
-        for m in config_module.ATOMESUS_MODELS:
-            models.append(f"at/{m}")
-    if "weize" not in disabled:
-        for m in config_module.WEIZE_MODELS:
-            models.append(f"wz/{m}")
     for prefix, info in config_module.CUSTOM_PROVIDERS.items():
         for m in info.get("models") or []:
             models.append(f"{prefix}/{m}")
@@ -623,12 +611,14 @@ async def messages(request: Request):
                 await _broadcast_request_log()
                 return StreamingResponse(_wrapped(), media_type="text/event-stream")
             usage = (body or {}).get("usage") or {}
+            input_tokens = usage.get("prompt_tokens", 0) or usage.get("input_tokens", 0) or 0
+            output_tokens = usage.get("completion_tokens", 0) or usage.get("output_tokens", 0) or 0
             add_request_log(
                 log_model, status, "custom", False, elapsed_ms,
-                usage.get("input_tokens", 0) or 0, usage.get("output_tokens", 0) or 0,
+                input_tokens, output_tokens,
                 provider=cprefix,
             )
-            await _bill_router_key(request, (usage.get("input_tokens", 0) or 0) + (usage.get("output_tokens", 0) or 0))
+            await _bill_router_key(request, input_tokens + output_tokens)
             await _broadcast_request_log()
             return JSONResponse(status_code=status, content=body)
 
@@ -658,11 +648,9 @@ async def messages(request: Request):
                     user_message_text = "\n".join(text_parts)
                 break
 
-    provider = "kc"
+    provider = "bm"
     if payload.get("model"):
-        if payload["model"].startswith("cv/") or payload["model"] in config_module.CAVOTI_MODELS:
-            provider = "cv"
-        elif payload["model"].startswith("bm/") or payload["model"] in config_module.BLUESMINDS_MODELS:
+        if payload["model"].startswith("bm/") or payload["model"] in config_module.BLUESMINDS_MODELS:
             provider = "bm"
         elif payload["model"].startswith("nry/") or payload["model"] in config_module.NARA_MODELS:
             provider = "nry"
@@ -672,17 +660,11 @@ async def messages(request: Request):
             provider = "qc"
         elif payload["model"].startswith("mk/") or payload["model"] in config_module.MARKETKU_MODELS:
             provider = "marketku"
-        elif payload["model"].startswith("at/") or payload["model"] in config_module.ATOMESUS_MODELS:
-            provider = "atomesus"
-        elif payload["model"].startswith("wz/") or payload["model"] in config_module.WEIZE_MODELS:
-            provider = "weize"
-        elif payload["model"].startswith("kc/") or payload["model"] in config_module.KIMCHI_MODELS:
-            provider = "kc"
 
     if provider in config_module.DISABLED_PROVIDERS:
         return JSONResponse(status_code=503, content={"error": {"message": f"Provider '{provider}' has been removed."}})
 
-    for prefix in ("kc/", "cv/", "bm/", "nry/", "dh/", "qc/", "mk/", "at/", "wz/"):
+    for prefix in ("bm/", "nry/", "dh/", "qc/", "mk/"):
         if payload.get("model", "").startswith(prefix):
             payload["model"] = payload["model"][len(prefix):]
             break
@@ -692,9 +674,7 @@ async def messages(request: Request):
 
     # Determine current API key for both memory and brain
     current_key = ""
-    if provider == "cv":
-        current_key = get_current_cv_key() if CV_API_KEYS else CAVOTI_API_KEY or ""
-    elif provider == "bm":
+    if provider == "bm":
         current_key = get_current_bm_key() if BM_API_KEYS else BLUESMINDS_API_KEY or ""
     elif provider == "nry":
         current_key = get_current_nr_key() if NR_API_KEYS else ""
@@ -704,12 +684,6 @@ async def messages(request: Request):
         current_key = get_current_qc_key() if QC_API_KEYS else ""
     elif provider == "marketku":
         current_key = get_current_marketku_key() if MARKETKU_API_KEYS else ""
-    elif provider == "atomesus":
-        current_key = get_current_atomesus_key() if ATOMESUS_API_KEYS else ""
-    elif provider == "weize":
-        current_key = get_current_weize_key() if WEIZE_API_KEYS else ""
-    else:
-        current_key = get_current_key() if API_KEYS else ""
 
     # Brain sessions are automatic. Explicit session IDs let clients preserve
     # continuity; otherwise the stable first user message identifies a thread.
@@ -785,10 +759,7 @@ async def messages(request: Request):
     if brain_context:
         payload = await BrainMiddleware.inject_brain_context(payload, brain_context)
 
-    if provider == "cv":
-        upstream_base_url = CAVOTI_BASE_URL
-        log_model = f"cv/{payload['model']}"
-    elif provider == "bm":
+    if provider == "bm":
         upstream_base_url = BLUESMINDS_BASE_URL
         log_model = f"bm/{payload['model']}"
     elif provider == "nry":
@@ -803,15 +774,9 @@ async def messages(request: Request):
     elif provider == "marketku":
         upstream_base_url = MARKETKU_BASE_URL
         log_model = f"mk/{payload['model']}"
-    elif provider == "atomesus":
-        upstream_base_url = ATOMESUS_BASE_URL
-        log_model = f"at/{payload['model']}"
-    elif provider == "weize":
-        upstream_base_url = WEIZE_BASE_URL
-        log_model = payload['model']
     else:
-        upstream_base_url = DEFAULT_UPSTREAM_URL
-        log_model = f"kc/{payload['model']}"
+        upstream_base_url = BLUESMINDS_BASE_URL
+        log_model = f"bm/{payload['model']}"
 
     # What the response claims to be. Logs and routing stats keep using
     # log_model so the dashboard still shows the model that actually ran.
@@ -830,9 +795,7 @@ async def messages(request: Request):
     original_messages = upstream_req["messages"][:]
     compact_levels = [None, 20, 6]
 
-    if provider == "cv":
-        api_keys_to_use = CV_API_KEYS
-    elif provider == "bm":
+    if provider == "bm":
         api_keys_to_use = BM_API_KEYS
     elif provider == "nry":
         api_keys_to_use = NR_API_KEYS
@@ -842,17 +805,11 @@ async def messages(request: Request):
         api_keys_to_use = QC_API_KEYS
     elif provider == "marketku":
         api_keys_to_use = MARKETKU_API_KEYS
-    elif provider == "atomesus":
-        api_keys_to_use = ATOMESUS_API_KEYS
-    elif provider == "weize":
-        api_keys_to_use = WEIZE_API_KEYS
     else:
-        api_keys_to_use = API_KEYS
+        api_keys_to_use = BM_API_KEYS
 
     if not api_keys_to_use:
-        if provider == "cv" and CAVOTI_API_KEY:
-            api_keys_to_use = [CAVOTI_API_KEY]
-        elif provider == "bm" and BLUESMINDS_API_KEY:
+        if provider == "bm" and BLUESMINDS_API_KEY:
             api_keys_to_use = [BLUESMINDS_API_KEY]
         else:
             return JSONResponse(status_code=500, content={"error": "No upstream API keys available"})
@@ -931,9 +888,7 @@ async def messages(request: Request):
                 model_switched = False
 
                 for attempt in range(len(api_keys_to_use)):
-                    if provider == "cv":
-                        current_key = get_current_cv_key()
-                    elif provider == "bm":
+                    if provider == "bm":
                         current_key = get_current_bm_key()
                     elif provider == "nry":
                         current_key = get_current_nr_key()
@@ -943,12 +898,8 @@ async def messages(request: Request):
                         current_key = get_current_qc_key_for_model(requested_qc_model)
                     elif provider == "marketku":
                         current_key = get_current_marketku_key()
-                    elif provider == "atomesus":
-                        current_key = get_current_atomesus_key()
-                    elif provider == "weize":
-                        current_key = get_current_weize_key()
                     else:
-                        current_key = get_current_key()
+                        current_key = get_current_bm_key()
 
                     headers["Authorization"] = f"Bearer {current_key}"
 
@@ -1012,11 +963,7 @@ async def messages(request: Request):
                                             model_switched = True
                                             continue
 
-                                    if provider == "kc":
-                                        rotate_key()
-                                    elif provider == "cv":
-                                        rotate_cv_key()
-                                    elif provider == "bm":
+                                    if provider == "bm":
                                         rotate_bm_key()
                                     elif provider == "nry":
                                         rotate_nr_key()
@@ -1026,10 +973,6 @@ async def messages(request: Request):
                                         rotate_qc_key()
                                     elif provider == "marketku":
                                         rotate_marketku_key()
-                                    elif provider == "atomesus":
-                                        rotate_atomesus_key()
-                                    elif provider == "weize":
-                                        rotate_weize_key()
                                     last_error_status = resp.status_code
                                     last_error_content = err_data or {"error": f"HTTP {resp.status_code} error"}
                                     await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -1118,11 +1061,7 @@ async def messages(request: Request):
                                 threshold = config_module.SLOW_RESPONSE_THRESHOLD_MS
                                 if threshold > 0 and ttft_ms > threshold and len(api_keys_to_use) > 1:
                                     print(f"[LOG] Slow TTFT {ttft_ms}ms > {threshold}ms, rotating {provider} key proactively")
-                                    if provider == "kc":
-                                        rotate_key(reason="Slow")
-                                    elif provider == "cv":
-                                        rotate_cv_key(reason="Slow")
-                                    elif provider == "bm":
+                                    if provider == "bm":
                                         rotate_bm_key(reason="Slow")
                                     elif provider == "nry":
                                         rotate_nr_key(reason="Slow")
@@ -1156,11 +1095,7 @@ async def messages(request: Request):
                                 return
                             rotated_occurred = True
                             add_request_log(log_model, 500, current_key, True, int((time.time() - start_req_time) * 1000))
-                            if provider == "kc":
-                                rotate_key()
-                            elif provider == "cv":
-                                rotate_cv_key()
-                            elif provider == "bm":
+                            if provider == "bm":
                                 rotate_bm_key()
                             elif provider == "nry":
                                 rotate_nr_key()
@@ -1170,10 +1105,6 @@ async def messages(request: Request):
                                 rotate_qc_key()
                             elif provider == "marketku":
                                 rotate_marketku_key()
-                            elif provider == "atomesus":
-                                rotate_atomesus_key()
-                            elif provider == "weize":
-                                rotate_weize_key()
                             last_error_status = 500
                             last_error_content = {"error": str(e)}
                             await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -1206,9 +1137,7 @@ async def messages(request: Request):
         model_switched = False
 
         for attempt in range(len(api_keys_to_use)):
-            if provider == "cv":
-                current_key = get_current_cv_key()
-            elif provider == "bm":
+            if provider == "bm":
                 current_key = get_current_bm_key()
             elif provider == "nry":
                 current_key = get_current_nr_key()
@@ -1218,12 +1147,8 @@ async def messages(request: Request):
                 current_key = get_current_qc_key_for_model(requested_qc_model)
             elif provider == "marketku":
                 current_key = get_current_marketku_key()
-            elif provider == "atomesus":
-                current_key = get_current_atomesus_key()
-            elif provider == "weize":
-                current_key = get_current_weize_key()
             else:
-                current_key = get_current_key()
+                current_key = get_current_bm_key()
 
             headers["Authorization"] = f"Bearer {current_key}"
             for h in ("x-api-key", "anthropic-version"):
@@ -1286,11 +1211,7 @@ async def messages(request: Request):
                             model_switched = True
                             continue
 
-                    if provider == "kc":
-                        rotate_key()
-                    elif provider == "cv":
-                        rotate_cv_key()
-                    elif provider == "bm":
+                    if provider == "bm":
                         rotate_bm_key()
                     elif provider == "nry":
                         rotate_nr_key()
@@ -1300,10 +1221,6 @@ async def messages(request: Request):
                         rotate_qc_key()
                     elif provider == "marketku":
                         rotate_marketku_key()
-                    elif provider == "atomesus":
-                        rotate_atomesus_key()
-                    elif provider == "weize":
-                        rotate_weize_key()
                     last_error_status = resp.status_code
                     last_error_content = err_json or {"error": resp.text}
                     await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -1340,23 +1257,14 @@ async def messages(request: Request):
                 threshold = config_module.SLOW_RESPONSE_THRESHOLD_MS
                 if threshold > 0 and total_ms > threshold and len(api_keys_to_use) > 1:
                     print(f"[LOG] Slow response {total_ms}ms > {threshold}ms, rotating {provider} key proactively")
-                    if provider == "kc":
-                        rotate_key(reason="Slow")
-                    elif provider == "cv":
-                        rotate_cv_key(reason="Slow")
-                    elif provider == "bm":
+                    if provider == "bm":
                         rotate_bm_key(reason="Slow")
                     elif provider == "nry":
                         rotate_nr_key(reason="Slow")
                     elif provider == "qc":
-                        # Per-model slow rotation: move to next key for this model
                         rotate_qc_key_for_model(requested_qc_model)
                     elif provider == "marketku":
                         rotate_marketku_key()
-                    elif provider == "atomesus":
-                        rotate_atomesus_key()
-                    elif provider == "weize":
-                        rotate_weize_key()
                     # Dahl upstream is inherently slow; don't rotate on slow total time
                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                 await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -1384,11 +1292,7 @@ async def messages(request: Request):
                     return JSONResponse(status_code=500, content={"error": str(e)})
                 rotated_occurred = True
                 add_request_log(log_model, 500, current_key, True, int((time.time() - start_req_time) * 1000))
-                if provider == "kc":
-                    rotate_key()
-                elif provider == "cv":
-                    rotate_cv_key()
-                elif provider == "bm":
+                if provider == "bm":
                     rotate_bm_key()
                 elif provider == "nry":
                     rotate_nr_key()
@@ -1398,8 +1302,6 @@ async def messages(request: Request):
                     rotate_qc_key()
                 elif provider == "marketku":
                     rotate_marketku_key()
-                elif provider == "atomesus":
-                    rotate_atomesus_key()
                 last_error_status = 500
                 last_error_content = {"error": str(e)}
                 await sse_broadcaster.broadcast("status", await _build_status_dict())
@@ -1507,7 +1409,7 @@ async def chat_completions(request: Request):
         return JSONResponse(status_code=400, content={"error": {"message": f"Invalid JSON: {str(e)}"}})
 
     payload = dict(openai_payload)
-    requested_model, display_model = _resolve_alias(request, payload.get("model") or "cv/gpt-5.4-mini")
+    requested_model, display_model = _resolve_alias(request, payload.get("model") or "bm/claude-3-5-sonnet-20241022")
     payload["model"] = requested_model
     print(f"[CHAT-COMPLETIONS] Model: {requested_model}, stream: {payload.get('stream')}", flush=True)
 
@@ -1576,11 +1478,9 @@ async def chat_completions(request: Request):
 
             return StreamingResponse(_relay_openai_stream(), media_type="text/event-stream")
 
-    provider = "cv"
+    provider = "bm"
 
-    if requested_model.startswith("cv/") or requested_model in config_module.CAVOTI_MODELS:
-        provider = "cv"
-    elif requested_model.startswith("bm/") or requested_model in config_module.BLUESMINDS_MODELS:
+    if requested_model.startswith("bm/") or requested_model in config_module.BLUESMINDS_MODELS:
         provider = "bm"
     elif requested_model.startswith("nry/") or requested_model in config_module.NARA_MODELS:
         provider = "nry"
@@ -1590,26 +1490,16 @@ async def chat_completions(request: Request):
         provider = "qc"
     elif requested_model.startswith("mk/") or requested_model in config_module.MARKETKU_MODELS:
         provider = "marketku"
-    elif requested_model.startswith("at/") or requested_model in config_module.ATOMESUS_MODELS:
-        provider = "atomesus"
-    elif requested_model.startswith("wz/") or requested_model in config_module.WEIZE_MODELS:
-        provider = "weize"
-    elif requested_model.startswith("kc/") or requested_model in config_module.KIMCHI_MODELS:
-        provider = "kc"
 
     if provider in config_module.DISABLED_PROVIDERS:
         return JSONResponse(status_code=503, content={"error": {"message": f"Provider '{provider}' has been removed."}})
 
     provider_prefixes = {
-        "kc": "kc/",
-        "cv": "cv/",
         "bm": "bm/",
         "nry": "nry/",
         "dahl": "dh/",
         "qc": "qc/",
         "marketku": "mk/",
-        "atomesus": "at/",
-        "weize": "wz/",
     }
     prefix = provider_prefixes.get(provider)
     upstream_model = requested_model[len(prefix):] if prefix and requested_model.startswith(prefix) else requested_model
@@ -1617,12 +1507,7 @@ async def chat_completions(request: Request):
         upstream_model = resolve_dahl_model(upstream_model)
     payload["model"] = upstream_model
 
-    if provider == "cv":
-        upstream_base_url = CAVOTI_BASE_URL
-        api_keys_to_use = CV_API_KEYS or ([CAVOTI_API_KEY] if CAVOTI_API_KEY else [])
-        get_key = get_current_cv_key
-        rotate = rotate_cv_key
-    elif provider == "bm":
+    if provider == "bm":
         upstream_base_url = BLUESMINDS_BASE_URL
         api_keys_to_use = BM_API_KEYS or ([BLUESMINDS_API_KEY] if BLUESMINDS_API_KEY else [])
         get_key = get_current_bm_key
@@ -1647,21 +1532,11 @@ async def chat_completions(request: Request):
         api_keys_to_use = MARKETKU_API_KEYS
         get_key = get_current_marketku_key
         rotate = rotate_marketku_key
-    elif provider == "atomesus":
-        upstream_base_url = ATOMESUS_BASE_URL
-        api_keys_to_use = ATOMESUS_API_KEYS
-        get_key = get_current_atomesus_key
-        rotate = rotate_atomesus_key
-    elif provider == "weize":
-        upstream_base_url = WEIZE_BASE_URL
-        api_keys_to_use = WEIZE_API_KEYS
-        get_key = get_current_weize_key
-        rotate = rotate_weize_key
     else:
-        upstream_base_url = DEFAULT_UPSTREAM_URL
-        api_keys_to_use = API_KEYS
-        get_key = get_current_key
-        rotate = rotate_key
+        upstream_base_url = BLUESMINDS_BASE_URL
+        api_keys_to_use = BM_API_KEYS or ([BLUESMINDS_API_KEY] if BLUESMINDS_API_KEY else [])
+        get_key = get_current_bm_key
+        rotate = rotate_bm_key
 
     if not api_keys_to_use:
         return JSONResponse(status_code=500, content={"error": {"message": "No upstream API keys available"}})
@@ -1746,6 +1621,7 @@ async def chat_completions(request: Request):
                     should_strip = requested_model.endswith(("-thinking", "-agentic", "-thinking-agentic"))
                     buffer = ""
                     inside_thinking = False
+                    token_usage = {"prompt_tokens": 0, "completion_tokens": 0}
 
                     print(f"[STREAM] Model: {requested_model}, should_strip: {should_strip}", flush=True)
 
@@ -1780,6 +1656,13 @@ async def chat_completions(request: Request):
                                         yield f"{line}\n".encode('utf-8')
                                         continue
 
+                                    # Capture usage from final chunk
+                                    usage = data.get('usage', {})
+                                    if usage.get('prompt_tokens'):
+                                        token_usage['prompt_tokens'] = usage['prompt_tokens']
+                                    if usage.get('completion_tokens'):
+                                        token_usage['completion_tokens'] = usage['completion_tokens']
+
                                     if should_strip and (data.get('choices') or []):
                                         delta = data['choices'][0].get('delta', {})
                                         content = delta.get('content', '')
@@ -1812,6 +1695,14 @@ async def chat_completions(request: Request):
                             # event that arrived without a trailing newline.
                             if buffer:
                                 yield buffer.encode('utf-8')
+
+                            # Log request with token usage
+                            total_ms = int((time.time() - start_req_time) * 1000)
+                            add_request_log(
+                                requested_model, 200, current_key[:15], False, total_ms,
+                                token_usage['prompt_tokens'], token_usage['completion_tokens'],
+                                provider=provider
+                            )
 
                 return StreamingResponse(stream_openai(), media_type="text/event-stream")
 
@@ -1859,7 +1750,10 @@ async def chat_completions(request: Request):
                         assistant_content=assistant_content,
                         model=requested_model,
                     )
-                add_request_log(requested_model, 200, current_key, False, int((time.time() - start_req_time) * 1000))
+                usage = content.get("usage", {}) if isinstance(content, dict) else {}
+                input_tokens = usage.get("prompt_tokens", 0) or 0
+                output_tokens = usage.get("completion_tokens", 0) or 0
+                add_request_log(requested_model, 200, current_key, False, int((time.time() - start_req_time) * 1000), input_tokens, output_tokens)
                 await sse_broadcaster.broadcast("log", recent_requests[0] if recent_requests else {})
                 await sse_broadcaster.broadcast("status", await _build_status_dict())
                 # Upstream reports its own model name; swap in the alias so the

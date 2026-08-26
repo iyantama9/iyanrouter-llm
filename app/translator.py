@@ -591,6 +591,9 @@ async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0, toke
         fr = choice.get("finish_reason")
         if fr:
             finish_reason = fr
+        usage = chunk.get("usage", {})
+        if usage.get("completion_tokens"):
+            output_tokens = usage["completion_tokens"]
 
         # Stream reasoning content as native Anthropic thinking blocks (for models that support reasoning_content)
         reasoning = delta.get("reasoning_content")

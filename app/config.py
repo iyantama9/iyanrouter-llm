@@ -14,31 +14,29 @@ def reload_models_from_env():
     """Re-read model lists from .env after they've been updated via /api/models/refresh."""
     load_dotenv(override=True)
 
-    global KIMCHI_MODELS_RAW, CAVOTI_MODELS_RAW, BLUESMINDS_MODELS_RAW, NARA_MODELS_RAW
+    global BLUESMINDS_MODELS_RAW, NARA_MODELS_RAW
     global DAHL_MODELS_RAW, QWEN_CLOUD_MODELS_RAW, MARKETKU_MODELS_RAW
-    global ATOMESUS_MODELS_RAW, WEIZE_MODELS_RAW
-    global KIMCHI_MODELS, CAVOTI_MODELS, BLUESMINDS_MODELS, NARA_MODELS
+    global KIMCHI_MODELS_RAW, ATOMESUS_MODELS_RAW, WEIZE_MODELS_RAW
+    global BLUESMINDS_MODELS, NARA_MODELS
     global DAHL_MODELS, QWEN_CLOUD_MODELS, MARKETKU_MODELS
-    global ATOMESUS_MODELS, WEIZE_MODELS
+    global KIMCHI_MODELS, ATOMESUS_MODELS, WEIZE_MODELS
     global DAHL_MODELS_SHORT, DAHL_MODEL_MAP
 
-    KIMCHI_MODELS_RAW = os.getenv("KIMCHI_MODELS", "")
-    CAVOTI_MODELS_RAW = os.getenv("CAVOTI_MODELS", "")
     BLUESMINDS_MODELS_RAW = os.getenv("BLUESMINDS_MODELS", "")
     NARA_MODELS_RAW = os.getenv("NARA_MODELS", "")
     DAHL_MODELS_RAW = os.getenv("DAHL_MODELS", "")
     QWEN_CLOUD_MODELS_RAW = os.getenv("QWEN_CLOUD_MODELS", "")
     MARKETKU_MODELS_RAW = os.getenv("MARKETKU_MODELS", "")
+    KIMCHI_MODELS_RAW = os.getenv("KIMCHI_MODELS", "")
     ATOMESUS_MODELS_RAW = os.getenv("ATOMESUS_MODELS", "")
     WEIZE_MODELS_RAW = os.getenv("WEIZE_MODELS", "")
 
-    KIMCHI_MODELS = [m.strip() for m in KIMCHI_MODELS_RAW.split(",") if m.strip()]
-    CAVOTI_MODELS = [m.strip() for m in CAVOTI_MODELS_RAW.split(",") if m.strip()]
     BLUESMINDS_MODELS = [m.strip() for m in BLUESMINDS_MODELS_RAW.split(",") if m.strip()]
     NARA_MODELS = [m.strip() for m in NARA_MODELS_RAW.split(",") if m.strip()]
     DAHL_MODELS = [m.strip() for m in DAHL_MODELS_RAW.split(",") if m.strip()]
     QWEN_CLOUD_MODELS = [m.strip() for m in QWEN_CLOUD_MODELS_RAW.split(",") if m.strip()]
     MARKETKU_MODELS = [m.strip() for m in MARKETKU_MODELS_RAW.split(",") if m.strip()]
+    KIMCHI_MODELS = [m.strip() for m in KIMCHI_MODELS_RAW.split(",") if m.strip()]
     ATOMESUS_MODELS = [m.strip() for m in ATOMESUS_MODELS_RAW.split(",") if m.strip()]
     WEIZE_MODELS = [m.strip() for m in WEIZE_MODELS_RAW.split(",") if m.strip()]
 
@@ -50,23 +48,21 @@ if not DEFAULT_UPSTREAM_URL_RAW:
     raise ValueError("DEFAULT_UPSTREAM_URL environment variable is not set")
 
 # Models configuration
-KIMCHI_MODELS_RAW = os.getenv("KIMCHI_MODELS", "")
-CAVOTI_MODELS_RAW = os.getenv("CAVOTI_MODELS", "")
 BLUESMINDS_MODELS_RAW = os.getenv("BLUESMINDS_MODELS", "")
 NARA_MODELS_RAW = os.getenv("NARA_MODELS", "")
 DAHL_MODELS_RAW = os.getenv("DAHL_MODELS", "")
 QWEN_CLOUD_MODELS_RAW = os.getenv("QWEN_CLOUD_MODELS", "")
 MARKETKU_MODELS_RAW = os.getenv("MARKETKU_MODELS", "")
+KIMCHI_MODELS_RAW = os.getenv("KIMCHI_MODELS", "")
 ATOMESUS_MODELS_RAW = os.getenv("ATOMESUS_MODELS", "")
 WEIZE_MODELS_RAW = os.getenv("WEIZE_MODELS", "")
 
-KIMCHI_MODELS = [m.strip() for m in KIMCHI_MODELS_RAW.split(",") if m.strip()]
-CAVOTI_MODELS = [m.strip() for m in CAVOTI_MODELS_RAW.split(",") if m.strip()]
 BLUESMINDS_MODELS = [m.strip() for m in BLUESMINDS_MODELS_RAW.split(",") if m.strip()]
 NARA_MODELS = [m.strip() for m in NARA_MODELS_RAW.split(",") if m.strip()]
 DAHL_MODELS = [m.strip() for m in DAHL_MODELS_RAW.split(",") if m.strip()]
 QWEN_CLOUD_MODELS = [m.strip() for m in QWEN_CLOUD_MODELS_RAW.split(",") if m.strip()]
 MARKETKU_MODELS = [m.strip() for m in MARKETKU_MODELS_RAW.split(",") if m.strip()]
+KIMCHI_MODELS = [m.strip() for m in KIMCHI_MODELS_RAW.split(",") if m.strip()]
 ATOMESUS_MODELS = [m.strip() for m in ATOMESUS_MODELS_RAW.split(",") if m.strip()]
 WEIZE_MODELS = [m.strip() for m in WEIZE_MODELS_RAW.split(",") if m.strip()]
 # Short display names: strip vendor prefixes so upstream "moonshotai/Kimi-K2.6" becomes "Kimi-K2.6"
@@ -75,7 +71,6 @@ DAHL_MODEL_MAP = dict(zip(DAHL_MODELS_SHORT, DAHL_MODELS))
 
 ROUTER_DOMAIN = os.getenv("ROUTER_DOMAIN", "localhost")
 
-CAVOTI_API_KEY = os.getenv("CAVOTI_API_KEY")
 BLUESMINDS_API_KEY = os.getenv("BLUESMINDS_API_KEY")
 NARA_API_KEYS_RAW = os.getenv("NARA_API_KEYS", "")
 NARA_API_KEYS_ENV = [k.strip() for k in NARA_API_KEYS_RAW.split(",") if k.strip()]
@@ -85,16 +80,11 @@ QWEN_CLOUD_API_KEYS_RAW = os.getenv("QWEN_CLOUD_API_KEYS", "")
 QWEN_CLOUD_API_KEYS_ENV = [k.strip() for k in QWEN_CLOUD_API_KEYS_RAW.split(",") if k.strip()]
 MARKETKU_API_KEYS_RAW = os.getenv("MARKETKU_API_KEYS", os.getenv("MARKETKU_API_KEY", ""))
 MARKETKU_API_KEYS_ENV = [k.strip() for k in MARKETKU_API_KEYS_RAW.split(",") if k.strip()]
-ATOMESUS_API_KEYS_RAW = os.getenv("ATOMESUS_API_KEYS", os.getenv("ATOMESUS_API_KEY", ""))
-ATOMESUS_API_KEYS_ENV = [k.strip() for k in ATOMESUS_API_KEYS_RAW.split(",") if k.strip()]
-WEIZE_API_KEYS_RAW = os.getenv("WEIZE_API_KEYS", os.getenv("WEIZE_API_KEY", ""))
-WEIZE_API_KEYS_ENV = [k.strip() for k in WEIZE_API_KEYS_RAW.split(",") if k.strip()]
 
 # Per-model fallback order for Qwen Cloud when ALL keys have exhausted the requested model
 QC_FALLBACK_ORDER_RAW = os.getenv("QC_FALLBACK_ORDER", "qwen3.7-max,qwen-max,qwen-plus,deepseek-v3.2,glm-5.2,kimi-k2.7-code,qwen-turbo")
 QC_FALLBACK_ORDER = [m.strip() for m in QC_FALLBACK_ORDER_RAW.split(",") if m.strip()]
 
-KIMCHI_BASE_URL = os.getenv("KIMCHI_BASE_URL", "https://api.kimchi.cloud/v1").rstrip("/")
 DAHL_BASE_URL = os.getenv("DAHL_BASE_URL", "https://inference.dahl.global/v1").rstrip("/")
 QWEN_CLOUD_BASE_URL = os.getenv("QWEN_CLOUD_BASE_URL", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1").rstrip("/")
 MARKETKU_BASE_URL = os.getenv("MARKETKU_BASE_URL", "https://router.marketku.id/v1").rstrip("/")
@@ -107,7 +97,6 @@ SSL_KEYFILE = os.getenv("SSL_KEYFILE")
 SSL_CERTFILE = os.getenv("SSL_CERTFILE")
 
 DEFAULT_UPSTREAM_URL = DEFAULT_UPSTREAM_URL_RAW.rstrip("/")
-CAVOTI_BASE_URL = os.getenv("CAVOTI_BASE_URL", "https://sg.cavoti.com/v1").rstrip("/")
 BLUESMINDS_BASE_URL = os.getenv("BLUESMINDS_BASE_URL", "https://api.bluesminds.com/v1").rstrip("/")
 NARA_BASE_URL = os.getenv("NARA_BASE_URL", "https://router.bynara.id/v1").rstrip("/")
 DAHL_BASE_URL = os.getenv("DAHL_BASE_URL", "https://inference.dahl.global/v1").rstrip("/")
@@ -131,7 +120,6 @@ PORT = int(PORT_STR)
 # Admin credentials - hash if plaintext, or load hash from env
 _ADMIN_HASH = os.getenv("ADMIN_PASSWORD_HASH")
 if _ADMIN_HASH:
-    # Hash already exists in env
     ADMIN_PASSWORD_HASH = _ADMIN_HASH.encode()
 else:
     _raw_password = os.getenv("ADMIN_PASSWORD")
@@ -143,19 +131,14 @@ else:
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "iyanadmin")
 
-# Session secret: stable across restarts (derived from admin creds)
-SESSION_SECRET = hashlib.sha256(f"{ADMIN_USERNAME}:{os.getenv('ADMIN_PASSWORD', '')}:kimchi-secret-v2".encode()).hexdigest()
+SESSION_SECRET = hashlib.sha256(f"{ADMIN_USERNAME}:{os.getenv('ADMIN_PASSWORD', '')}:router-secret-v1".encode()).hexdigest()
 
 # In-memory state (primary for fast access, DB is persistence)
-API_KEYS = []
-CV_API_KEYS = []
 BM_API_KEYS = []
 NR_API_KEYS = []
 DAHL_API_KEYS = []
 QC_API_KEYS = []
 MARKETKU_API_KEYS = []
-ATOMESUS_API_KEYS = []
-WEIZE_API_KEYS = []
 
 key_statuses = {}
 key_limited_at: dict[str, float] = {}  # key_value -> time.time() when marked Limited
@@ -164,15 +147,11 @@ total_tokens = 0
 failover_count = 0
 recent_requests = []
 START_TIME = time.time()
-current_key_index = 0
-current_cv_key_index = 0
 current_bm_key_index = 0
 current_nr_key_index = 0
 current_dahl_key_index = 0
 current_qc_key_index = 0
 current_marketku_key_index = 0
-current_atomesus_key_index = 0
-current_weize_key_index = 0
 
 # Qwen Cloud per-model key state
 # model_short -> current key index for that model
@@ -180,16 +159,15 @@ qc_model_key_index: dict[str, int] = {}
 # key_value -> {model_short: exhausted?}
 qc_model_failures: dict[str, dict[str, bool]] = {}
 
-BUILTIN_PROVIDER_PREFIXES = {"kc", "cv", "bm", "nry", "dahl", "qc", "marketku", "atomesus", "weize"}
+BUILTIN_PROVIDER_PREFIXES = {"bm", "nry", "dahl", "qc", "marketku"}
 BUILTIN_PROVIDER_NAMES = {
-    "kc": "Kimchi", "cv": "Cavoti", "bm": "Bluesminds", "nry": "byNara",
+    "bm": "Bluesminds", "nry": "byNara",
     "dahl": "Dahl", "qc": "Qwen Cloud", "marketku": "MarketKu",
-    "atomesus": "Atomesus", "weize": "Weize",
 }
 BUILTIN_PROVIDER_BASE_URLS = {
-    "kc": KIMCHI_BASE_URL, "cv": CAVOTI_BASE_URL, "bm": BLUESMINDS_BASE_URL,
+    "bm": BLUESMINDS_BASE_URL,
     "nry": NARA_BASE_URL, "dahl": DAHL_BASE_URL, "qc": QWEN_CLOUD_BASE_URL,
-    "marketku": MARKETKU_BASE_URL, "atomesus": ATOMESUS_BASE_URL, "weize": WEIZE_BASE_URL,
+    "marketku": MARKETKU_BASE_URL,
 }
 
 # prefix -> {"name": str, "base_url": str, "api_format": "openai"|"anthropic"}
@@ -203,24 +181,25 @@ DISABLED_PROVIDERS: set = set()
 
 
 def _bg(coro):
+    async def _wrapped():
+        try:
+            await coro
+        except Exception as e:
+            print(f"[BG ERROR] {e}")
     try:
-        asyncio.create_task(coro)
+        asyncio.create_task(_wrapped())
     except RuntimeError:
         pass
 
 
 async def init_state_from_db():
-    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS, WEIZE_API_KEYS, key_statuses, total_requests, total_tokens, failover_count, current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index, current_atomesus_key_index, current_weize_key_index, START_TIME, CUSTOM_PROVIDERS, CUSTOM_PROVIDER_KEYS, DISABLED_PROVIDERS
+    global BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, key_statuses, total_requests, total_tokens, failover_count, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index, START_TIME, CUSTOM_PROVIDERS, CUSTOM_PROVIDER_KEYS, DISABLED_PROVIDERS
 
-    API_KEYS.clear()
-    CV_API_KEYS.clear()
     BM_API_KEYS.clear()
     NR_API_KEYS.clear()
     DAHL_API_KEYS.clear()
     QC_API_KEYS.clear()
     MARKETKU_API_KEYS.clear()
-    ATOMESUS_API_KEYS.clear()
-    WEIZE_API_KEYS.clear()
     key_statuses.clear()
 
     # Load custom (admin-added) providers and disabled built-ins first, so the
@@ -247,9 +226,7 @@ async def init_state_from_db():
             if provider != "nry" and val.startswith("sk-nry-"):
                 provider = "nry"
                 _bg(db_execute("UPDATE api_keys SET provider='nry' WHERE key_value=$1", val))
-            if provider == "cv":
-                CV_API_KEYS.append(val)
-            elif provider == "bm":
+            if provider == "bm":
                 BM_API_KEYS.append(val)
             elif provider == "nry":
                 NR_API_KEYS.append(val)
@@ -259,45 +236,9 @@ async def init_state_from_db():
                 QC_API_KEYS.append(val)
             elif provider == "marketku":
                 MARKETKU_API_KEYS.append(val)
-            elif provider == "atomesus":
-                ATOMESUS_API_KEYS.append(val)
-            elif provider == "weize":
-                WEIZE_API_KEYS.append(val)
             elif provider in CUSTOM_PROVIDERS:
                 CUSTOM_PROVIDER_KEYS[provider].append(val)
-            else:
-                API_KEYS.append(val)
             key_statuses[val] = r["status"]
-    else:
-        # Seed from .env fallback for Kimchi keys
-        raw_keys = os.getenv("CASTAI_API_KEYS", "")
-        env_keys = [k.strip() for k in raw_keys.split(",") if k.strip()]
-        if not env_keys:
-            single_key = os.getenv("CASTAI_API_KEY")
-            if single_key:
-                env_keys = [single_key]
-            else:
-                raise ValueError("CASTAI_API_KEY or CASTAI_API_KEYS environment variable is not set")
-        for i, k in enumerate(env_keys):
-            API_KEYS.append(k)
-            key_statuses[k] = "Active" if i == 0 else "Standby"
-            prefix = k[:15] + "..." if len(k) > 15 else k
-            await db_execute(
-                "INSERT INTO api_keys (key_value, key_prefix, status, provider) VALUES ($1, $2, $3, 'kc') ON CONFLICT DO NOTHING",
-                k, prefix, key_statuses[k]
-            )
-
-    # Always ensure CV key from env is seeded and present
-    cv_key = CAVOTI_API_KEY
-    if cv_key and cv_key not in CV_API_KEYS:
-        CV_API_KEYS.append(cv_key)
-        key_statuses[cv_key] = "Active"
-        prefix = cv_key[:15] + "..." if len(cv_key) > 15 else cv_key
-        await db_execute(
-            "INSERT INTO api_keys (key_value, key_prefix, status, provider) VALUES ($1, $2, $3, 'cv') ON CONFLICT DO NOTHING",
-            cv_key, prefix, key_statuses[cv_key]
-        )
-
     # Always ensure BM key from env is seeded and present
     bm_key = BLUESMINDS_API_KEY
     if bm_key and bm_key not in BM_API_KEYS:
@@ -351,55 +292,6 @@ async def init_state_from_db():
             await db_execute(
                 "INSERT INTO api_keys (key_value, key_prefix, status, provider) VALUES ($1, $2, $3, 'marketku') ON CONFLICT (key_value) DO UPDATE SET provider='marketku'",
                 mk_key, prefix, "Standby"
-            )
-
-    # Seed Atomesus keys from env
-    for at_key in ATOMESUS_API_KEYS_ENV:
-        if at_key not in ATOMESUS_API_KEYS:
-            ATOMESUS_API_KEYS.append(at_key)
-            key_statuses[at_key] = "Standby"
-            prefix = at_key[:15] + "..." if len(at_key) > 15 else at_key
-            await db_execute(
-                "INSERT INTO api_keys (key_value, key_prefix, status, provider) VALUES ($1, $2, $3, 'atomesus') ON CONFLICT (key_value) DO UPDATE SET provider='atomesus'",
-                at_key, prefix, "Standby"
-            )
-
-    # Seed Weize keys from env
-    for wz_key in WEIZE_API_KEYS_ENV:
-        if wz_key not in WEIZE_API_KEYS:
-            WEIZE_API_KEYS.append(wz_key)
-            key_statuses[wz_key] = "Standby"
-            prefix = wz_key[:15] + "..." if len(wz_key) > 15 else wz_key
-            await db_execute(
-                "INSERT INTO api_keys (key_value, key_prefix, status, provider) VALUES ($1, $2, $3, 'weize') ON CONFLICT (key_value) DO UPDATE SET provider='weize'",
-                wz_key, prefix, "Standby"
-            )
-
-    # Fix active key index
-    for i, k in enumerate(API_KEYS):
-        if key_statuses.get(k) == "Active":
-            current_key_index = i
-            break
-    else:
-        if API_KEYS:
-            current_key_index = 0
-            key_statuses[API_KEYS[0]] = "Active"
-            await db_execute(
-                "UPDATE api_keys SET status = 'Active' WHERE key_value = $1",
-                API_KEYS[0]
-            )
-
-    for i, k in enumerate(CV_API_KEYS):
-        if key_statuses.get(k) == "Active":
-            current_cv_key_index = i
-            break
-    else:
-        if CV_API_KEYS:
-            current_cv_key_index = 0
-            key_statuses[CV_API_KEYS[0]] = "Active"
-            await db_execute(
-                "UPDATE api_keys SET status = 'Active' WHERE key_value = $1",
-                CV_API_KEYS[0]
             )
 
     for i, k in enumerate(BM_API_KEYS):
@@ -467,86 +359,8 @@ async def init_state_from_db():
                 MARKETKU_API_KEYS[0]
             )
 
-    for i, k in enumerate(ATOMESUS_API_KEYS):
-        if key_statuses.get(k) == "Active":
-            current_atomesus_key_index = i
-            break
-    else:
-        if ATOMESUS_API_KEYS:
-            current_atomesus_key_index = 0
-            key_statuses[ATOMESUS_API_KEYS[0]] = "Active"
-            await db_execute(
-                "UPDATE api_keys SET status = 'Active' WHERE key_value = $1",
-                ATOMESUS_API_KEYS[0]
-            )
-
-    for i, k in enumerate(WEIZE_API_KEYS):
-        if key_statuses.get(k) == "Active":
-            current_weize_key_index = i
-            break
-    else:
-        if WEIZE_API_KEYS:
-            current_weize_key_index = 0
-            key_statuses[WEIZE_API_KEYS[0]] = "Active"
-            await db_execute(
-                "UPDATE api_keys SET status = 'Active' WHERE key_value = $1",
-                WEIZE_API_KEYS[0]
-            )
-
-    # Load stats from DB
-    tr = await db_fetchrow("SELECT value FROM server_config WHERE key = 'total_requests'")
-    if tr:
-        total_requests = int(tr["value"])
-    tt = await db_fetchrow("SELECT value FROM server_config WHERE key = 'total_tokens'")
-    if tt:
-        total_tokens = int(tt["value"])
-    fc = await db_fetchrow("SELECT value FROM server_config WHERE key = 'failover_count'")
-    if fc:
-        failover_count = int(fc["value"])
-    st = await db_fetchrow("SELECT value FROM server_config WHERE key = 'start_time'")
-    if st and st["value"] and st["value"] != "0":
-        START_TIME = float(st["value"])
-    else:
-        START_TIME = time.time()
-        await db_execute(
-            "INSERT INTO server_config (key, value) VALUES ('start_time', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
-            str(START_TIME)
-        )
-
-    # Recent requests from DB (last 20)
-    logs = await db_fetch("SELECT model, status_code, key_prefix, rotated, latency_ms, input_tokens, output_tokens, cached_tokens, provider, created_at FROM request_logs ORDER BY created_at DESC LIMIT 20")
-    recent_requests.clear()
-    for r in logs:
-        ts = r["created_at"]
-        if hasattr(ts, "strftime"):
-            import datetime
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=datetime.timezone.utc)
-            ts = ts.astimezone(datetime.timezone(datetime.timedelta(hours=7)))
-            ts = ts.strftime("%H:%M:%S")
-        else:
-            ts = str(ts)[11:19]
-        recent_requests.append({
-            "timestamp": ts,
-            "model": r["model"],
-            "status_code": r["status_code"],
-            "key_used": r["key_prefix"],
-            "rotated": r["rotated"],
-            "latency_ms": r["latency_ms"],
-            "provider": r["provider"] or provider_from_model(r["model"]),
-            "input_tokens": r["input_tokens"] or 0,
-            "output_tokens": r["output_tokens"] or 0,
-            "cached_tokens": r["cached_tokens"] or 0,
-        })
-
-    # Clean slate on startup — reset any previously Limited/Slow keys to Standby
-    for key, status in list(key_statuses.items()):
-        if status in ("Limited", "Slow"):
-            key_statuses[key] = "Standby"
-            await db_execute("UPDATE api_keys SET status = 'Standby' WHERE key_value = $1", key)
-
     custom_key_total = sum(len(v) for v in CUSTOM_PROVIDER_KEYS.values())
-    print(f"[INIT] Loaded {len(API_KEYS)} kc / {len(CV_API_KEYS)} cv / {len(BM_API_KEYS)} bm / {len(NR_API_KEYS)} nry / {len(DAHL_API_KEYS)} dahl / {len(QC_API_KEYS)} qc / {len(MARKETKU_API_KEYS)} marketku / {len(ATOMESUS_API_KEYS)} atomesus / {len(WEIZE_API_KEYS)} weize / {custom_key_total} custom ({len(CUSTOM_PROVIDERS)} providers) keys, {total_requests} total requests, {failover_count} failovers from DB, {len(DISABLED_PROVIDERS)} disabled providers")
+    print(f"[INIT] Loaded {len(BM_API_KEYS)} bm / {len(NR_API_KEYS)} nry / {len(DAHL_API_KEYS)} dahl / {len(QC_API_KEYS)} qc / {len(MARKETKU_API_KEYS)} marketku / {custom_key_total} custom ({len(CUSTOM_PROVIDERS)} providers) keys, {total_requests} total requests, {failover_count} failovers from DB, {len(DISABLED_PROVIDERS)} disabled providers")
 
 
 async def auto_reset_limited_keys():
@@ -587,25 +401,6 @@ def rotate_key(reason: str = "Limited"):
     _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
     return new_key
 
-
-def get_current_cv_key():
-    if not CV_API_KEYS:
-        return CAVOTI_API_KEY
-    return CV_API_KEYS[current_cv_key_index]
-
-
-def rotate_cv_key(reason: str = "Limited"):
-    global current_cv_key_index, failover_count
-    if len(CV_API_KEYS) <= 1:
-        return get_current_cv_key()
-    current_cv_key_index = (current_cv_key_index + 1) % len(CV_API_KEYS)
-    new_key = get_current_cv_key()
-    key_statuses[new_key] = "Active"
-    failover_count += 1
-    print(f"[LOG] Rotated cv key → index {current_cv_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
-    _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
-    return new_key
 
 
 def get_current_bm_key():
@@ -775,46 +570,6 @@ def rotate_marketku_key(reason: str = "Limited"):
     return new_key
 
 
-def get_current_atomesus_key():
-    if not ATOMESUS_API_KEYS:
-        return ""
-    return ATOMESUS_API_KEYS[current_atomesus_key_index]
-
-
-def rotate_atomesus_key(reason: str = "Limited"):
-    global current_atomesus_key_index, failover_count
-    if len(ATOMESUS_API_KEYS) <= 1:
-        return get_current_atomesus_key()
-    current_atomesus_key_index = (current_atomesus_key_index + 1) % len(ATOMESUS_API_KEYS)
-    new_key = get_current_atomesus_key()
-    key_statuses[new_key] = "Active"
-    failover_count += 1
-    print(f"[LOG] Rotated atomesus key → index {current_atomesus_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
-    _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
-    return new_key
-
-
-def get_current_weize_key():
-    if not WEIZE_API_KEYS:
-        return ""
-    return WEIZE_API_KEYS[current_weize_key_index]
-
-
-def rotate_weize_key(reason: str = "Limited"):
-    global current_weize_key_index, failover_count
-    if len(WEIZE_API_KEYS) <= 1:
-        return get_current_weize_key()
-    current_weize_key_index = (current_weize_key_index + 1) % len(WEIZE_API_KEYS)
-    new_key = get_current_weize_key()
-    key_statuses[new_key] = "Active"
-    failover_count += 1
-    print(f"[LOG] Rotated weize key → index {current_weize_key_index}: {new_key[:15]}... (reason: {reason})")
-    _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", new_key))
-    _bg(db_execute("INSERT INTO server_config (key, value) VALUES ('failover_count', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value", str(failover_count)))
-    return new_key
-
-
 def get_current_custom_key(prefix: str):
     keys = CUSTOM_PROVIDER_KEYS.get(prefix) or []
     if not keys:
@@ -947,9 +702,8 @@ async def remove_provider(prefix: str):
 
     if prefix in BUILTIN_PROVIDER_PREFIXES:
         provider_lists = {
-            "kc": API_KEYS, "cv": CV_API_KEYS, "bm": BM_API_KEYS, "nry": NR_API_KEYS,
+            "bm": BM_API_KEYS, "nry": NR_API_KEYS,
             "dahl": DAHL_API_KEYS, "qc": QC_API_KEYS, "marketku": MARKETKU_API_KEYS,
-            "atomesus": ATOMESUS_API_KEYS, "weize": WEIZE_API_KEYS,
         }
         keys = provider_lists[prefix]
         for k in list(keys):
@@ -996,7 +750,7 @@ def providers_signature() -> str:
     page reload.
     """
     builtin_models = {
-        "kc": KIMCHI_MODELS, "cv": CAVOTI_MODELS, "bm": BLUESMINDS_MODELS,
+        "kc": KIMCHI_MODELS, "bm": BLUESMINDS_MODELS,
         "nry": NARA_MODELS, "dahl": DAHL_MODELS_SHORT, "qc": QWEN_CLOUD_MODELS,
         "marketku": MARKETKU_MODELS, "atomesus": ATOMESUS_MODELS, "weize": WEIZE_MODELS,
     }
@@ -1014,6 +768,7 @@ def add_request_log(model, status_code, key_used, rotated, latency_ms, input_tok
     global total_requests, total_tokens
     total_requests += 1
     total_tokens += (input_tokens + output_tokens)
+    print(f"[LOG-REQ] model={model} in={input_tokens} out={output_tokens}")
     import datetime
     timestamp = (datetime.datetime.utcnow() + datetime.timedelta(hours=7)).strftime("%H:%M:%S")
     if provider is None:
@@ -1049,18 +804,15 @@ def add_request_log(model, status_code, key_used, rotated, latency_ms, input_tok
 
 
 def add_api_key(new_key: str, key_type: str = "auto"):
-    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS, WEIZE_API_KEYS
+    global BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS
     new_key = new_key.strip()
     if not new_key:
         return False, "Key cannot be empty"
     all_custom_keys = [k for keys in CUSTOM_PROVIDER_KEYS.values() for k in keys]
-    if new_key in API_KEYS or new_key in CV_API_KEYS or new_key in BM_API_KEYS or new_key in NR_API_KEYS or new_key in DAHL_API_KEYS or new_key in QC_API_KEYS or new_key in MARKETKU_API_KEYS or new_key in ATOMESUS_API_KEYS or new_key in WEIZE_API_KEYS or new_key in all_custom_keys:
+    if new_key in BM_API_KEYS or new_key in NR_API_KEYS or new_key in DAHL_API_KEYS or new_key in QC_API_KEYS or new_key in MARKETKU_API_KEYS or new_key in all_custom_keys:
         return False, "Key already exists"
 
-    if key_type == "cv":
-        CV_API_KEYS.append(new_key)
-        provider = "cv"
-    elif key_type == "bm":
+    if key_type == "bm":
         BM_API_KEYS.append(new_key)
         provider = "bm"
     elif key_type == "nry":
@@ -1075,66 +827,35 @@ def add_api_key(new_key: str, key_type: str = "auto"):
     elif key_type == "marketku":
         MARKETKU_API_KEYS.append(new_key)
         provider = "marketku"
-    elif key_type == "atomesus":
-        ATOMESUS_API_KEYS.append(new_key)
-        provider = "atomesus"
-    elif key_type == "weize":
-        WEIZE_API_KEYS.append(new_key)
-        provider = "weize"
     elif key_type in CUSTOM_PROVIDERS:
         CUSTOM_PROVIDER_KEYS.setdefault(key_type, []).append(new_key)
         provider = key_type
-    elif key_type == "kc":
-        API_KEYS.append(new_key)
-        provider = "kc"
     else:
-        API_KEYS.append(new_key)
-        provider = "kc"
+        return False, f"Unknown provider: {key_type}"
 
     key_statuses[new_key] = "Standby"
     prefix = new_key[:15] + "..." if len(new_key) > 15 else new_key
-    # Save to DB
     _bg(db_execute(
         "INSERT INTO api_keys (key_value, key_prefix, status, provider) VALUES ($1, $2, 'Standby', $3)",
         new_key, prefix, provider
     ))
-    # Adding a key for a provider implicitly un-disables it -- a prior
-    # "remove provider" only makes sense as permanent if nobody ever
-    # provisions it again.
     if provider in DISABLED_PROVIDERS:
         DISABLED_PROVIDERS.discard(provider)
         from app.database import enable_provider as db_enable_provider
         _bg(db_enable_provider(provider))
-    # Also keep .env synced as backup for castai keys
-    if provider == "kc":
-        _save_keys_to_env()
     return True, "Key added successfully"
 
 
 def remove_api_key(key_prefix: str):
-    global API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS, WEIZE_API_KEYS, current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index, current_atomesus_key_index, current_weize_key_index
+    global BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index
     target_key = None
     target_list = None
 
-    for key in API_KEYS:
+    for key in BM_API_KEYS:
         if key.startswith(key_prefix):
             target_key = key
-            target_list = API_KEYS
+            target_list = BM_API_KEYS
             break
-
-    if not target_key:
-        for key in CV_API_KEYS:
-            if key.startswith(key_prefix):
-                target_key = key
-                target_list = CV_API_KEYS
-                break
-
-    if not target_key:
-        for key in BM_API_KEYS:
-            if key.startswith(key_prefix):
-                target_key = key
-                target_list = BM_API_KEYS
-                break
 
     if not target_key:
         for key in NR_API_KEYS:
@@ -1165,20 +886,6 @@ def remove_api_key(key_prefix: str):
                 break
 
     if not target_key:
-        for key in ATOMESUS_API_KEYS:
-            if key.startswith(key_prefix):
-                target_key = key
-                target_list = ATOMESUS_API_KEYS
-                break
-
-    if not target_key:
-        for key in WEIZE_API_KEYS:
-            if key.startswith(key_prefix):
-                target_key = key
-                target_list = WEIZE_API_KEYS
-                break
-
-    if not target_key:
         for cprefix, keys in CUSTOM_PROVIDER_KEYS.items():
             for key in keys:
                 if key.startswith(key_prefix):
@@ -1188,26 +895,7 @@ def remove_api_key(key_prefix: str):
     if len(target_list) <= 1:
         return False, "Cannot delete the last remaining key of this type"
         
-    if target_list == API_KEYS:
-        active_key = get_current_key()
-        if target_key == active_key:
-            rotate_key()
-        API_KEYS.remove(target_key)
-        try:
-            current_key_index = API_KEYS.index(get_current_key()) if get_current_key() in API_KEYS else 0
-        except Exception:
-            current_key_index = 0
-
-    elif target_list == CV_API_KEYS:
-        active_key = get_current_cv_key()
-        if target_key == active_key:
-            rotate_cv_key()
-        CV_API_KEYS.remove(target_key)
-        try:
-            current_cv_key_index = CV_API_KEYS.index(get_current_cv_key()) if get_current_cv_key() in CV_API_KEYS else 0
-        except Exception:
-            current_cv_key_index = 0
-    elif target_list == BM_API_KEYS:
+    if target_list == BM_API_KEYS:
         active_key = get_current_bm_key()
         if target_key == active_key:
             rotate_bm_key()
@@ -1252,32 +940,12 @@ def remove_api_key(key_prefix: str):
             current_marketku_key_index = MARKETKU_API_KEYS.index(get_current_marketku_key()) if get_current_marketku_key() in MARKETKU_API_KEYS else 0
         except Exception:
             current_marketku_key_index = 0
-    elif target_list == ATOMESUS_API_KEYS:
-        active_key = get_current_atomesus_key()
-        if target_key == active_key:
-            rotate_atomesus_key()
-        ATOMESUS_API_KEYS.remove(target_key)
-        try:
-            current_atomesus_key_index = ATOMESUS_API_KEYS.index(get_current_atomesus_key()) if get_current_atomesus_key() in ATOMESUS_API_KEYS else 0
-        except Exception:
-            current_atomesus_key_index = 0
-    else:
-        active_key = get_current_weize_key()
-        if target_key == active_key:
-            rotate_weize_key()
-        WEIZE_API_KEYS.remove(target_key)
-        try:
-            current_weize_key_index = WEIZE_API_KEYS.index(get_current_weize_key()) if get_current_weize_key() in WEIZE_API_KEYS else 0
-        except Exception:
-            current_weize_key_index = 0
 
     if target_key in key_statuses:
         del key_statuses[target_key]
 
     # Remove from DB
     _bg(db_execute("DELETE FROM api_keys WHERE key_value = $1", target_key))
-    if target_list == API_KEYS:
-        _save_keys_to_env()
     return True, "Key removed successfully"
 
 
@@ -1292,7 +960,7 @@ def bulk_remove_api_keys(key_prefixes: list):
 
 
 def reset_key_status(key_prefix: str):
-    for key in API_KEYS + CV_API_KEYS + BM_API_KEYS + NR_API_KEYS + DAHL_API_KEYS + QC_API_KEYS + MARKETKU_API_KEYS + ATOMESUS_API_KEYS + WEIZE_API_KEYS:
+    for key in BM_API_KEYS + NR_API_KEYS + DAHL_API_KEYS + QC_API_KEYS + MARKETKU_API_KEYS:
         if key.startswith(key_prefix):
             key_statuses[key] = "Standby"
             reset_qc_model_failures(key)
@@ -1302,22 +970,17 @@ def reset_key_status(key_prefix: str):
 
 
 def set_active_key(key_prefix: str, provider: str = None):
-    global current_key_index, current_cv_key_index, current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index, current_atomesus_key_index, current_weize_key_index
+    global current_bm_key_index, current_nr_key_index, current_dahl_key_index, current_qc_key_index, current_marketku_key_index
     target_key = None
     target_list = None
 
-    if provider == "kc": target_list = API_KEYS
-    elif provider == "cv": target_list = CV_API_KEYS
-    elif provider == "bm": target_list = BM_API_KEYS
+    if provider == "bm": target_list = BM_API_KEYS
     elif provider == "nry": target_list = NR_API_KEYS
     elif provider == "dahl": target_list = DAHL_API_KEYS
     elif provider == "qc": target_list = QC_API_KEYS
     elif provider == "marketku": target_list = MARKETKU_API_KEYS
-    elif provider == "atomesus": target_list = ATOMESUS_API_KEYS
-    elif provider == "weize": target_list = WEIZE_API_KEYS
     else:
-        # Auto detect list if provider not explicitly passed
-        for lst in [API_KEYS, CV_API_KEYS, BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS, ATOMESUS_API_KEYS, WEIZE_API_KEYS]:
+        for lst in [BM_API_KEYS, NR_API_KEYS, DAHL_API_KEYS, QC_API_KEYS, MARKETKU_API_KEYS]:
             for k in lst:
                 if k.startswith(key_prefix):
                     target_key = k
@@ -1336,27 +999,20 @@ def set_active_key(key_prefix: str, provider: str = None):
     if not target_key:
         return False, "Key not found"
 
-    # Set all in target_list to Standby
     for k in target_list:
         if key_statuses.get(k) == "Active":
             key_statuses[k] = "Standby"
             _bg(db_execute("UPDATE api_keys SET status = 'Standby' WHERE key_value = $1", k))
             
-    # Set target to Active
     key_statuses[target_key] = "Active"
     _bg(db_execute("UPDATE api_keys SET status = 'Active' WHERE key_value = $1", target_key))
     
-    # Update index
     idx = target_list.index(target_key)
-    if target_list == API_KEYS: current_key_index = idx
-    elif target_list == CV_API_KEYS: current_cv_key_index = idx
-    elif target_list == BM_API_KEYS: current_bm_key_index = idx
+    if target_list == BM_API_KEYS: current_bm_key_index = idx
     elif target_list == NR_API_KEYS: current_nr_key_index = idx
     elif target_list == DAHL_API_KEYS: current_dahl_key_index = idx
     elif target_list == QC_API_KEYS: current_qc_key_index = idx
     elif target_list == MARKETKU_API_KEYS: current_marketku_key_index = idx
-    elif target_list == ATOMESUS_API_KEYS: current_atomesus_key_index = idx
-    elif target_list == WEIZE_API_KEYS: current_weize_key_index = idx
 
     return True, "Key set as Active"
 
@@ -1364,13 +1020,13 @@ def set_active_key(key_prefix: str, provider: str = None):
 def get_masked_keys():
     result = []
     idx = 0
-    for key in API_KEYS + CV_API_KEYS + BM_API_KEYS + NR_API_KEYS + DAHL_API_KEYS + QC_API_KEYS + MARKETKU_API_KEYS + ATOMESUS_API_KEYS + WEIZE_API_KEYS:
+    for key in BM_API_KEYS + NR_API_KEYS + DAHL_API_KEYS + QC_API_KEYS + MARKETKU_API_KEYS:
         status = key_statuses.get(key, "Standby")
         masked = key[:15] + "..." if len(key) > 15 else key
         _provider = (
-            "kc" if key in API_KEYS else "cv" if key in CV_API_KEYS else "bm" if key in BM_API_KEYS
+            "bm" if key in BM_API_KEYS
             else "nry" if key in NR_API_KEYS else "dahl" if key in DAHL_API_KEYS else "qc" if key in QC_API_KEYS
-            else "marketku" if key in MARKETKU_API_KEYS else "atomesus" if key in ATOMESUS_API_KEYS else "weize"
+            else "marketku"
         )
         result.append({
             "index": idx,
@@ -1379,15 +1035,11 @@ def get_masked_keys():
             "status": status,
             "provider": _provider,
             "provider_name": BUILTIN_PROVIDER_NAMES.get(_provider, _provider),
-            "is_kc": key in API_KEYS,
-            "is_cv": key in CV_API_KEYS,
             "is_bm": key in BM_API_KEYS,
             "is_nr": key in NR_API_KEYS,
             "is_dahl": key in DAHL_API_KEYS,
             "is_qc": key in QC_API_KEYS,
-            "is_marketku": key in MARKETKU_API_KEYS,
-            "is_atomesus": key in ATOMESUS_API_KEYS,
-            "is_weize": key in WEIZE_API_KEYS
+            "is_marketku": key in MARKETKU_API_KEYS
         })
         idx += 1
     for prefix, keys in CUSTOM_PROVIDER_KEYS.items():
@@ -1402,8 +1054,8 @@ def get_masked_keys():
                 "status": status,
                 "provider": prefix,
                 "provider_name": info.get("name", prefix),
-                "is_kc": False, "is_cv": False, "is_bm": False, "is_nr": False, "is_dahl": False,
-                "is_qc": False, "is_marketku": False, "is_atomesus": False, "is_weize": False,
+                "is_bm": False, "is_nr": False, "is_dahl": False,
+                "is_qc": False, "is_marketku": False,
                 "is_custom": True,
             })
             idx += 1
@@ -1413,37 +1065,6 @@ def get_masked_keys():
 def resolve_dahl_model(model_short: str) -> str:
     """Map short dh/<name> to upstream full model id."""
     return DAHL_MODEL_MAP.get(model_short, model_short)
-
-
-def _save_keys_to_env():
-    dotenv_path = os.path.join(os.path.dirname(__file__), ".env")
-    if not os.path.exists(dotenv_path):
-        dotenv_path = ".env"
-    lines = []
-    if os.path.exists(dotenv_path):
-        with open(dotenv_path, "r") as f:
-            lines = f.readlines()
-    keys_str = ",".join(API_KEYS)
-    cv_keys_str = ",".join(CV_API_KEYS)
-    new_line = f"CASTAI_API_KEYS={keys_str}\n"
-    new_cv_line = f"CAVOTI_API_KEYS={cv_keys_str}\n"
-
-    found = False
-    found_cv = False
-    for idx, line in enumerate(lines):
-        if line.startswith("CASTAI_API_KEYS="):
-            lines[idx] = new_line
-            found = True
-        elif line.startswith("CAVOTI_API_KEYS=") or line.startswith("CAVOTI_API_KEY="):
-            lines[idx] = new_cv_line
-            found_cv = True
-
-    if not found:
-        lines.append(new_line)
-    if not found_cv:
-        lines.append(new_cv_line)
-    with open(dotenv_path, "w") as f:
-        f.writelines(lines)
 
 
 # Auth helpers
