@@ -42,6 +42,26 @@ async def fetchrow(query, *args):
 async def fetch_one(query, *args):
     return await fetchrow(query, *args)
 
+async def get_lifetime_stats():
+    """All-time request/token/rotation totals, computed straight from
+    request_logs rather than the separately-tracked in-memory counters in
+    config.py. Those counters reset to 0 on every process restart and were
+    never restored from their own persisted snapshot at startup, so the
+    dashboard cards looked "reset" after every deploy even though the log
+    table itself never lost anything. Querying the ground truth directly
+    means there's nothing left to fall out of sync.
+    """
+    row = await fetchrow("""
+        SELECT
+            COUNT(*)                                          AS total_requests,
+            COALESCE(SUM(input_tokens + output_tokens), 0)    AS total_tokens,
+            COUNT(*) FILTER (WHERE rotated)                   AS total_rotations
+        FROM request_logs
+    """)
+    if not row:
+        return {"total_requests": 0, "total_tokens": 0, "total_rotations": 0}
+    return dict(row)
+
 async def setup_tables():
     await execute("""
         CREATE TABLE IF NOT EXISTS api_keys (

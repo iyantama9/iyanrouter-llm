@@ -11,8 +11,8 @@ import asyncio
 
 import app.config as config_module
 from app.config import (
-    KIMCHI_BASE_URL, CAVOTI_BASE_URL, BLUESMINDS_BASE_URL, NARA_BASE_URL, DAHL_BASE_URL,
-    QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL, ATOMESUS_BASE_URL, WEIZE_BASE_URL, ROUTER_PASSWORD,
+    BLUESMINDS_BASE_URL, NARA_BASE_URL, DAHL_BASE_URL,
+    QWEN_CLOUD_BASE_URL, MARKETKU_BASE_URL, ROUTER_PASSWORD,
     recent_requests,
     add_api_key, remove_api_key, bulk_remove_api_keys, reset_key_status, get_masked_keys, set_active_key,
     add_custom_provider, remove_provider,
@@ -21,7 +21,7 @@ from app.config import (
 from app.sse import sse_broadcaster
 from app.database import (
     fetch, fetch_one, create_router_api_key, get_router_api_keys, delete_router_api_key,
-    update_router_api_key, reset_router_key_usage,
+    update_router_api_key, reset_router_key_usage, get_lifetime_stats,
 )
 
 
@@ -62,13 +62,20 @@ async def _build_status_dict():
     uptime_str = f"{hours}h {minutes}m {seconds}s"
     _all_keys = get_masked_keys()
     available_keys = sum(1 for k in _all_keys if k['status'] in ('Active', 'Standby'))
+    # total_requests/total_tokens/failover_count in config_module are
+    # in-memory counters that reset to 0 on every process restart -- they
+    # get written to server_config on every request but were never read
+    # back at startup, so the dashboard looked "reset" after every deploy
+    # even though request_logs itself never lost a row. Read the real
+    # lifetime totals straight from the log table instead.
+    lifetime = await get_lifetime_stats()
     return {
         "status": "online",
         "uptime": uptime_str,
         "uptime_seconds": uptime_seconds,
-        "total_requests": config_module.total_requests,
-        "failover_count": config_module.failover_count,
-        "total_tokens": config_module.total_tokens,
+        "total_requests": lifetime["total_requests"],
+        "failover_count": lifetime["total_rotations"],
+        "total_tokens": lifetime["total_tokens"],
         "available_keys": available_keys,
         "total_keys": len(_all_keys),
         "keys": _all_keys,
@@ -331,15 +338,11 @@ async def api_set_active_key(payload: dict = Body(...), user: None = Depends(req
 @router.get("/api/models")
 async def api_get_models(user: None = Depends(require_auth)):
     builtin = {
-        "kimchi": ("kc", [f"kc/{m}" for m in config_module.KIMCHI_MODELS]),
-        "cavoti": ("cv", [f"cv/{m}" for m in config_module.CAVOTI_MODELS]),
         "bluesminds": ("bm", [f"bm/{m}" for m in config_module.BLUESMINDS_MODELS]),
         "bynara": ("nry", [f"nry/{m}" for m in config_module.NARA_MODELS]),
         "dahl": ("dahl", [f"dh/{m}" for m in config_module.DAHL_MODELS_SHORT]),
         "qwen_cloud": ("qc", [f"qc/{m}" for m in config_module.QWEN_CLOUD_MODELS]),
         "marketku": ("marketku", [f"mk/{m}" for m in config_module.MARKETKU_MODELS]),
-        "atomesus": ("atomesus", [f"at/{m}" for m in config_module.ATOMESUS_MODELS]),
-        "weize": ("weize", config_module.WEIZE_MODELS),
     }
     # A removed built-in keeps its cached model list around (so re-adding a
     # key doesn't need a fresh /models refresh to work again) -- just don't
@@ -366,42 +369,30 @@ async def api_refresh_models(user: None = Depends(require_auth)):
 
     # Provider to base_url mapping
     provider_base_urls = {
-        "kc": KIMCHI_BASE_URL,
-        "cv": CAVOTI_BASE_URL,
         "bm": BLUESMINDS_BASE_URL,
         "nry": NARA_BASE_URL,
         "dahl": DAHL_BASE_URL,
         "qc": QWEN_CLOUD_BASE_URL,
         "marketku": MARKETKU_BASE_URL,
-        "atomesus": ATOMESUS_BASE_URL,
-        "weize": WEIZE_BASE_URL,
     }
 
     # Provider to env var name mapping
     provider_env_vars = {
-        "kc": "KIMCHI_MODELS",
-        "cv": "CAVOTI_MODELS",
         "bm": "BLUESMINDS_MODELS",
         "nry": "NARA_MODELS",
         "dahl": "DAHL_MODELS",
         "qc": "QWEN_CLOUD_MODELS",
         "marketku": "MARKETKU_MODELS",
-        "atomesus": "ATOMESUS_MODELS",
-        "weize": "WEIZE_MODELS",
     }
 
     # Provider to routing prefix mapping (used to strip self-namespaced ids
     # some providers return, e.g. marketku returns "mk/auto" instead of "auto")
     provider_prefixes = {
-        "kc": "kc",
-        "cv": "cv",
         "bm": "bm",
         "nry": "nry",
         "dahl": "dh",
         "qc": "qc",
         "marketku": "mk",
-        "atomesus": "at",
-        "weize": "wz",
     }
 
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -668,7 +659,6 @@ async def routing_stats_endpoint(range: str = Query("today"), user: None = Depen
         SELECT
             COALESCE(provider, CASE split_part(model, '/', 1)
                 WHEN 'dh' THEN 'dahl' WHEN 'mk' THEN 'marketku'
-                WHEN 'at' THEN 'atomesus' WHEN 'wz' THEN 'weize'
                 ELSE split_part(model, '/', 1) END) AS provider,
             COUNT(*)                        AS requests,
             COALESCE(SUM(input_tokens), 0)  AS input_tokens,
@@ -717,7 +707,6 @@ async def routing_stats_endpoint(range: str = Query("today"), user: None = Depen
         SELECT model, status_code, input_tokens, output_tokens, cached_tokens, latency_ms,
                COALESCE(provider, CASE split_part(model, '/', 1)
                 WHEN 'dh' THEN 'dahl' WHEN 'mk' THEN 'marketku'
-                WHEN 'at' THEN 'atomesus' WHEN 'wz' THEN 'weize'
                 ELSE split_part(model, '/', 1) END) AS provider, created_at
         FROM request_logs
         WHERE created_at >= $1
