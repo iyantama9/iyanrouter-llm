@@ -524,6 +524,7 @@ def _qwen_image_response(data: dict, model: str, msg_id: str) -> dict:
 
 @router.get("/v1/models")
 @router.get("/models")
+@router.get("/v1/v1/models")
 async def list_models(request: Request):
     if not await _check_router_auth(request):
         return JSONResponse(status_code=401, content={"error": {"message": "Invalid router password."}})
@@ -574,12 +575,14 @@ async def list_models(request: Request):
 
 
 @router.post("/v1/messages/count_tokens")
+@router.post("/v1/v1/messages/count_tokens")
 async def count_tokens(body: dict = Body(...)):
     tokens = estimate_tokens(body)
     return {"input_tokens": tokens}
 
 
 @router.post("/v1/messages")
+@router.post("/v1/v1/messages")
 async def messages(request: Request):
     if not await _check_router_auth(request):
         return JSONResponse(status_code=401, content={"error": {"message": "Invalid router password."}})
@@ -1403,11 +1406,18 @@ def _aggregate_openai_sse(raw_text: str, fallback_model: str):
 
 
 @router.post("/v1/chat/completions")
+@router.post("/chat/completions")
 async def chat_completions(request: Request):
     """
     OpenAI-compatible endpoint for OpenChamber and other OpenAI-compatible clients.
     Keeps the external API OpenAI-shaped while using the same provider prefixes as
     /v1/messages: kc, cv, bm, nry, dh, qc, mk, at, wz.
+
+    Registered at both /v1/chat/completions and /chat/completions -- an
+    OpenAI SDK configured with this router's *Anthropic* base URL (no /v1)
+    would otherwise call the bare path and get a 404, since OpenAI clients
+    append "/chat/completions" directly to whatever base_url they're given
+    rather than always assuming a /v1 prefix.
     """
     if not await _check_router_auth(request):
         return JSONResponse(status_code=401, content={"error": {"message": "Invalid API key"}})
