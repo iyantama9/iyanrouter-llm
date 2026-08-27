@@ -233,8 +233,8 @@
                     <td class="px-4 py-3 text-xs font-medium max-w-[180px] truncate" x-text="log.model || '—'"></td>
                     <td class="px-4 py-3">
                       <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-600 border"
-                            :class="log.status_code === 200 ? 'bg-accent/8 text-accent border-accent/20' :
-                                    log.status_code >= 500 ? 'bg-destructive/8 text-destructive border-destructive/20' :
+                            :class="log.status_code >= 200 && log.status_code < 300 ? 'bg-success/8 text-success border-success/20' :
+                                    log.status_code >= 400 ? 'bg-destructive/8 text-destructive border-destructive/20' :
                                     'bg-primary/8 text-primary border-primary/20'"
                             x-text="log.status_code"></span>
                     </td>
@@ -951,6 +951,18 @@
           </div>
         </div>
 
+        <!-- Bulk actions bar -->
+        <div x-show="models.selected.length" class="flex items-center justify-between px-4 py-2.5 bg-primary/8 border border-primary/20 rounded-xl">
+          <span class="text-xs text-primary font-medium" x-text="`${models.selected.length} model(s) selected`"></span>
+          <div class="flex items-center gap-3">
+            <button @click="models.selected = []" class="text-xs text-muted-foreground hover:text-foreground transition-colors">Clear</button>
+            <button @click="bulkRemoveSelectedModels()" :disabled="models.bulkRemoving"
+                    class="text-xs font-medium text-destructive hover:text-destructive/80 transition-colors disabled:opacity-50">
+              <span x-text="models.bulkRemoving ? 'Removing…' : 'Remove from catalog'"></span>
+            </button>
+          </div>
+        </div>
+
         <template x-if="models.loading">
           <div class="bg-card border border-border rounded-2xl p-8">
             <div class="animate-shimmer h-5 rounded max-w-xs mx-auto"></div>
@@ -970,21 +982,31 @@
 
             <template x-if="filteredModels().length">
               <div>
+                <!-- Select all (current page) -->
+                <div class="flex items-center gap-3 px-4 py-2 border-b border-border/40 bg-secondary/10">
+                  <input type="checkbox" :checked="allModelsOnPageSelected()" @change="toggleSelectAllModelsOnPage()"
+                         class="rounded border-border accent-primary">
+                  <span class="text-[10px] text-muted-foreground uppercase tracking-wider font-mono">Select page</span>
+                </div>
                 <div class="divide-y divide-border/40">
                   <template x-for="m in pagedModels()" :key="m.id">
-                    <button @click="copyModelToClipboard(m.id)"
-                            class="group w-full flex items-center justify-between gap-3 px-4 py-2.5 hover:bg-secondary/25 transition-colors text-left">
-                      <div class="flex items-center gap-2.5 min-w-0">
-                        <span class="w-5 h-5 rounded-lg flex items-center justify-center shrink-0 text-[9px] font-700 uppercase border"
-                              :class="providerAccent(m.providerId)" x-text="m.providerId.slice(0,2)"></span>
-                        <span class="font-mono text-xs text-foreground truncate" x-text="m.id"></span>
-                      </div>
-                      <div class="flex items-center gap-2.5 shrink-0">
-                        <span class="hidden sm:inline text-[10px] text-muted-foreground font-mono" x-text="m.providerName"></span>
-                        <span x-show="models.copied === m.id" class="text-[10px] font-600 text-accent uppercase tracking-wider">Copied</span>
-                        <i data-lucide="copy" class="w-3.5 h-3.5 text-muted-foreground group-hover:text-primary transition-colors"></i>
-                      </div>
-                    </button>
+                    <div class="group w-full flex items-center gap-3 px-4 py-2.5 hover:bg-secondary/25 transition-colors">
+                      <input type="checkbox" :checked="models.selected.includes(m.id)" @change="toggleModelSelect(m.id)"
+                             class="rounded border-border accent-primary shrink-0">
+                      <button @click="copyModelToClipboard(m.id)"
+                              class="flex-1 flex items-center justify-between gap-3 min-w-0 text-left">
+                        <div class="flex items-center gap-2.5 min-w-0">
+                          <span class="w-5 h-5 rounded-lg flex items-center justify-center shrink-0 text-[9px] font-700 uppercase border"
+                                :class="providerAccent(m.providerId)" x-text="m.providerId.slice(0,2)"></span>
+                          <span class="font-mono text-xs text-foreground truncate" x-text="m.id"></span>
+                        </div>
+                        <div class="flex items-center gap-2.5 shrink-0">
+                          <span class="hidden sm:inline text-[10px] text-muted-foreground font-mono" x-text="m.providerName"></span>
+                          <span x-show="models.copied === m.id" class="text-[10px] font-600 text-accent uppercase tracking-wider">Copied</span>
+                          <i data-lucide="copy" class="w-3.5 h-3.5 text-muted-foreground group-hover:text-primary transition-colors"></i>
+                        </div>
+                      </button>
+                    </div>
                   </template>
                 </div>
 
@@ -1683,6 +1705,8 @@ function dashboard() {
       page: 1,
       perPage: 25,
       _flat: [],   // rebuilt by fetchModels; filtering/paging reads from here
+      selected: [],   // full ids ("prefix/model"), for bulk catalog removal
+      bulkRemoving: false,
     },
 
     stats: {
@@ -2412,6 +2436,9 @@ function dashboard() {
           this.models.provider = 'all';
         }
         this.models.page = 1;
+        // Stale ids would otherwise silently no-op in a bulk action after
+        // the catalog changed underneath the selection.
+        this.models.selected = [];
         this.models.loaded = true;
         this.$nextTick(() => lucide.createIcons());
       } catch (e) {
@@ -2475,6 +2502,76 @@ function dashboard() {
       }).catch(() => {
         this.toast('Failed to copy', 'error');
       });
+    },
+
+    // ── Bulk model selection ──
+    toggleModelSelect(id) {
+      const i = this.models.selected.indexOf(id);
+      if (i === -1) this.models.selected.push(id);
+      else this.models.selected.splice(i, 1);
+    },
+    allModelsOnPageSelected() {
+      const page = this.pagedModels();
+      return page.length > 0 && page.every(m => this.models.selected.includes(m.id));
+    },
+    toggleSelectAllModelsOnPage() {
+      const page = this.pagedModels();
+      if (this.allModelsOnPageSelected()) {
+        this.models.selected = this.models.selected.filter(id => !page.some(m => m.id === id));
+      } else {
+        const merged = new Set(this.models.selected);
+        page.forEach(m => merged.add(m.id));
+        this.models.selected = [...merged];
+      }
+    },
+    async bulkRemoveSelectedModels() {
+      const selected = this.models.selected;
+      if (!selected.length) return;
+      if (!confirm(`Remove ${selected.length} model(s) from their provider's catalog?`)) return;
+
+      // Only custom providers store their model list in a form this endpoint
+      // can rewrite -- built-ins are sourced from env vars and aren't
+      // editable here. Group by provider so each one gets a single PUT with
+      // its full remaining list, and tally what had to be skipped so the
+      // user isn't left guessing why the count doesn't match.
+      const byProvider = {};
+      for (const id of selected) {
+        const entry = this.models._flat.find(m => m.id === id);
+        if (!entry) continue;
+        (byProvider[entry.providerId] ||= []).push(entry);
+      }
+
+      this.models.bulkRemoving = true;
+      let removedCount = 0, skippedCount = 0;
+      try {
+        for (const [prefix, entries] of Object.entries(byProvider)) {
+          const providerInfo = this.providerMgmt.providers.find(p => p.prefix === prefix);
+          if (!providerInfo || providerInfo.builtin) {
+            skippedCount += entries.length;
+            continue;
+          }
+          const removeBare = new Set(entries.map(e => e.id.slice(prefix.length + 1)));
+          const currentBare = (this.models.providers.find(p => p.id === prefix)?.models || [])
+            .map(fullId => fullId.slice(prefix.length + 1));
+          const remaining = currentBare.filter(bare => !removeBare.has(bare));
+          const r = await fetch(`/api/providers/${prefix}/models`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ models: remaining })
+          });
+          const d = await r.json();
+          if (d.success) removedCount += entries.length;
+          else skippedCount += entries.length;
+        }
+        this.models.selected = [];
+        await this.fetchModels();
+        if (removedCount) this.toast(`Removed ${removedCount} model(s) from catalog${skippedCount ? `, skipped ${skippedCount} (not editable here)` : ''}`, 'success');
+        else this.toast('Nothing removed -- selected models belong to built-in providers, which are sourced from .env instead', 'error');
+      } catch (e) {
+        this.toast('Bulk remove failed', 'error');
+      } finally {
+        this.models.bulkRemoving = false;
+      }
     },
 
     // ── Playground ──

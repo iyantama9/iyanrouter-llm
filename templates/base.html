@@ -1,11 +1,26 @@
 <!DOCTYPE html>
-<html lang="en" x-data="{ dark: true }" :class="dark ? 'dark' : ''">
+<html lang="en" x-data="{ dark: document.documentElement.classList.contains('dark') }" :class="dark ? 'dark' : ''">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}Iyan Router{% endblock %}</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="alternate icon" href="/static/favicon.svg">
+
+  <script>
+    // Applies the saved theme before first paint. Alpine's own x-data (and
+    // the Tailwind CDN script below) only run after the full document is
+    // parsed, so without this the page always paints light-mode first, then
+    // flips -- a flash on every single reload, worse for anyone who actually
+    // prefers light mode since it then flips a second time once dashboard.html's
+    // own init() re-applies the saved preference.
+    (function () {
+      var saved = localStorage.getItem('theme');
+      if (saved ? saved === 'dark' : true) {
+        document.documentElement.classList.add('dark');
+      }
+    })();
+  </script>
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -28,6 +43,8 @@
             'accent-foreground': 'hsl(var(--accent-foreground))',
             destructive: 'hsl(var(--destructive))',
             'destructive-foreground': 'hsl(var(--destructive-foreground))',
+            success: 'hsl(var(--success))',
+            'success-foreground': 'hsl(var(--success-foreground))',
             border: 'hsl(var(--border))',
             input: 'hsl(var(--input))',
             ring: 'hsl(var(--ring))',
@@ -70,6 +87,8 @@
       --accent-foreground: 0 0% 100%;
       --destructive: 0 72% 51%;
       --destructive-foreground: 0 0% 100%;
+      --success: 142 71% 34%;
+      --success-foreground: 0 0% 100%;
       --border: 0 0% 88%;
       --input: 0 0% 88%;
       --ring: 0 0% 12%;
@@ -91,6 +110,8 @@
       --accent-foreground: 0 0% 8%;
       --destructive: 0 72% 51%;
       --destructive-foreground: 0 0% 100%;
+      --success: 142 65% 45%;
+      --success-foreground: 0 0% 8%;
       --border: 0 0% 15%;
       --input: 0 0% 11%;
       --ring: 0 0% 96%;
