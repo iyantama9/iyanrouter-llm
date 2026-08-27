@@ -22,7 +22,8 @@ from app.translator import (
     is_context_window_error, to_anthropic_stream_error, estimate_tokens,
 )
 from app.translator_openai import (
-    openai_to_anthropic_messages, anthropic_to_openai_response, anthropic_to_openai_stream_chunk
+    openai_to_anthropic_messages, anthropic_to_openai_response, make_anthropic_to_openai_stream_converter,
+    openai_tools_to_anthropic, openai_tool_choice_to_anthropic,
 )
 from app.sse import sse_broadcaster
 from app.brain.middleware import BrainMiddleware
@@ -1438,6 +1439,17 @@ async def chat_completions(request: Request):
             }
             if system_prompt:
                 anthropic_payload["system"] = system_prompt
+            # Without these, an agentic client calling through the OpenAI-
+            # compatible endpoint against a custom provider never got its
+            # tool schema forwarded at all -- the upstream model had no
+            # idea what functions existed, so it could only narrate intent
+            # in prose instead of emitting a real tool call.
+            tools = openai_tools_to_anthropic(payload.get("tools"))
+            if tools:
+                anthropic_payload["tools"] = tools
+            tool_choice = openai_tool_choice_to_anthropic(payload.get("tool_choice"))
+            if tool_choice:
+                anthropic_payload["tool_choice"] = tool_choice
             want_stream = bool(payload.get("stream"))
             start_req_time = time.time()
             kind, status, body = await _dispatch_custom_provider(cprefix, anthropic_payload, want_stream, display_model)
@@ -1462,6 +1474,7 @@ async def chat_completions(request: Request):
                 # or raw, possibly-partial byte chunks (upstream was
                 # anthropic-format, relayed as-is) -- buffer defensively so
                 # a line split across two chunks doesn't get silently dropped.
+                convert = make_anthropic_to_openai_stream_converter(display_model)
                 buffer = ""
                 async for chunk in body:
                     text = chunk if isinstance(chunk, str) else chunk.decode(errors="ignore")
@@ -1479,7 +1492,7 @@ async def chat_completions(request: Request):
                             chunk_data = json.loads(data_str)
                         except Exception:
                             continue
-                        out = anthropic_to_openai_stream_chunk(chunk_data, display_model)
+                        out = convert(chunk_data)
                         if out:
                             yield out.encode()
                 yield b"data: [DONE]\n\n"

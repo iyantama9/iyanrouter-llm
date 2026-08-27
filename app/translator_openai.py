@@ -109,6 +109,53 @@ def openai_to_anthropic_messages(openai_messages: List[Dict]) -> tuple[Optional[
     return system_prompt, anthropic_messages
 
 
+def openai_tools_to_anthropic(openai_tools):
+    """Convert an OpenAI-shaped `tools` array to Anthropic's `tools` shape.
+
+    Without this, a request that arrives via the OpenAI-compatible
+    /v1/chat/completions endpoint and gets dispatched to a custom provider
+    (which internally speaks Anthropic shape) had its `tools` array dropped
+    entirely on the floor -- the upstream model never even learned what
+    functions were available, so it could only narrate intent in prose
+    instead of emitting a real tool call. This is the inverse of
+    convert_tools() in translator.py, which goes the other direction.
+    """
+    if not openai_tools:
+        return []
+    result = []
+    for t in openai_tools:
+        fn = t.get("function", t) if isinstance(t, dict) else {}
+        name = fn.get("name")
+        if not name:
+            continue
+        result.append({
+            "name": name,
+            "description": fn.get("description", ""),
+            "input_schema": fn.get("parameters", {}),
+        })
+    return result
+
+
+def openai_tool_choice_to_anthropic(tool_choice):
+    """Convert an OpenAI-shaped `tool_choice` to Anthropic's shape."""
+    if not tool_choice:
+        return None
+    if tool_choice == "auto":
+        return {"type": "auto"}
+    if tool_choice == "required":
+        return {"type": "any"}
+    if tool_choice == "none":
+        # Anthropic has no direct "tools exist but don't use them" mode;
+        # omitting tool_choice (defaults to auto) is the closest available
+        # behavior rather than pretending an exact equivalent exists.
+        return None
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        name = tool_choice.get("function", {}).get("name")
+        if name:
+            return {"type": "tool", "name": name}
+    return None
+
+
 def _created_timestamp() -> int:
     """Return a valid OpenAI-style Unix timestamp."""
     return int(time.time())
@@ -169,34 +216,31 @@ def anthropic_to_openai_response(anthropic_response: Dict, model: str) -> Dict:
     }
 
 
-def anthropic_to_openai_stream_chunk(chunk_data: Dict, model: str) -> Optional[str]:
+def make_anthropic_to_openai_stream_converter(model: str):
     """
-    Convert Anthropic SSE chunk to OpenAI format.
-    Returns formatted SSE line or None if not a content chunk.
+    Build a per-stream converter from Anthropic SSE chunks to OpenAI chunks.
+
+    A factory rather than a plain function because tool_use blocks need
+    state that spans chunks: Anthropic identifies a tool call by its
+    content_block `index` (shared with text/thinking blocks in the same
+    stream), but OpenAI's `tool_calls` delta needs its own zero-based index
+    counting only tool calls. That mapping has to be built up as
+    content_block_start events for tool_use blocks arrive and then reused
+    for every input_json_delta that follows.
+
+    Earlier this only forwarded text_delta -- content_block_start (where a
+    tool call's id/name live) and input_json_delta (its arguments) had no
+    handling at all, so a tool call was silently dropped from the stream:
+    an agentic client calling through /v1/chat/completions against a
+    custom provider got an empty response with no tool_calls and no error,
+    as if the model produced nothing.
     """
-    event_type = chunk_data.get("type")
+    tool_index_by_block = {}
 
-    if event_type == "message_start":
-        # Initial chunk
-        message_data = chunk_data.get("message", {})
-        chunk = {
-            "id": f"chatcmpl-{uuid.uuid4().hex[:28]}",
-            "object": "chat.completion.chunk",
-            "created": _created_timestamp(),
-            "model": model,
-            "choices": [{
-                "index": 0,
-                "delta": {"role": "assistant", "content": ""},
-                "finish_reason": None
-            }]
-        }
-        return f"data: {json.dumps(chunk)}\n\n"
+    def convert(chunk_data: Dict) -> Optional[str]:
+        event_type = chunk_data.get("type")
 
-    elif event_type == "content_block_delta":
-        delta = chunk_data.get("delta", {})
-        delta_type = delta.get("type")
-
-        if delta_type == "text_delta":
+        if event_type == "message_start":
             chunk = {
                 "id": f"chatcmpl-{uuid.uuid4().hex[:28]}",
                 "object": "chat.completion.chunk",
@@ -204,33 +248,121 @@ def anthropic_to_openai_stream_chunk(chunk_data: Dict, model: str) -> Optional[s
                 "model": model,
                 "choices": [{
                     "index": 0,
-                    "delta": {"content": delta.get("text", "")},
+                    "delta": {"role": "assistant", "content": ""},
                     "finish_reason": None
                 }]
             }
             return f"data: {json.dumps(chunk)}\n\n"
 
-    elif event_type == "message_delta":
-        delta = chunk_data.get("delta", {})
-        stop_reason = delta.get("stop_reason")
-        if stop_reason:
-            chunk = {
-                "id": f"chatcmpl-{uuid.uuid4().hex[:28]}",
-                "object": "chat.completion.chunk",
-                "created": _created_timestamp(),
-                "model": model,
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": _map_stop_reason(stop_reason)
-                }]
-            }
-            return f"data: {json.dumps(chunk)}\n\n"
+        elif event_type == "content_block_start":
+            block = chunk_data.get("content_block", {})
+            if block.get("type") == "tool_use":
+                openai_idx = len(tool_index_by_block)
+                tool_index_by_block[chunk_data.get("index")] = openai_idx
+                chunk = {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:28]}",
+                    "object": "chat.completion.chunk",
+                    "created": _created_timestamp(),
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"tool_calls": [{
+                            "index": openai_idx,
+                            "id": block.get("id", f"call_{uuid.uuid4().hex[:8]}"),
+                            "type": "function",
+                            "function": {"name": block.get("name", ""), "arguments": ""},
+                        }]},
+                        "finish_reason": None
+                    }]
+                }
+                return f"data: {json.dumps(chunk)}\n\n"
+            return None
 
-    elif event_type == "message_stop":
-        # The caller closes the stream with its own [DONE]; emitting one here
-        # too put two of them on the wire.
+        elif event_type == "content_block_delta":
+            delta = chunk_data.get("delta", {})
+            delta_type = delta.get("type")
+
+            if delta_type == "text_delta":
+                chunk = {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:28]}",
+                    "object": "chat.completion.chunk",
+                    "created": _created_timestamp(),
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"content": delta.get("text", "")},
+                        "finish_reason": None
+                    }]
+                }
+                return f"data: {json.dumps(chunk)}\n\n"
+
+            elif delta_type == "input_json_delta":
+                openai_idx = tool_index_by_block.get(chunk_data.get("index"))
+                if openai_idx is None:
+                    return None
+                chunk = {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:28]}",
+                    "object": "chat.completion.chunk",
+                    "created": _created_timestamp(),
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"tool_calls": [{
+                            "index": openai_idx,
+                            "function": {"arguments": delta.get("partial_json", "")},
+                        }]},
+                        "finish_reason": None
+                    }]
+                }
+                return f"data: {json.dumps(chunk)}\n\n"
+
+            elif delta_type == "thinking_delta":
+                # chat.completions has no standard field for this; forward it
+                # as `reasoning_content`, the same de-facto extension this
+                # router already reads FROM upstream reasoning models, so any
+                # client that looks for it can still show it, and one that
+                # doesn't just ignores an unrecognized delta key.
+                chunk = {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:28]}",
+                    "object": "chat.completion.chunk",
+                    "created": _created_timestamp(),
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"reasoning_content": delta.get("thinking", "")},
+                        "finish_reason": None
+                    }]
+                }
+                return f"data: {json.dumps(chunk)}\n\n"
+
+            return None
+
+        elif event_type == "message_delta":
+            delta = chunk_data.get("delta", {})
+            stop_reason = delta.get("stop_reason")
+            if stop_reason:
+                chunk = {
+                    "id": f"chatcmpl-{uuid.uuid4().hex[:28]}",
+                    "object": "chat.completion.chunk",
+                    "created": _created_timestamp(),
+                    "model": model,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": _map_stop_reason(stop_reason)
+                    }]
+                }
+                return f"data: {json.dumps(chunk)}\n\n"
+            return None
+
+        elif event_type == "message_stop":
+            # The caller closes the stream with its own [DONE]; emitting one
+            # here too put two of them on the wire.
+            return None
+
         return None
+
+    return convert
 
     return None
 
