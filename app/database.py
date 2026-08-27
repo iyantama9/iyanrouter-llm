@@ -487,9 +487,15 @@ async def create_router_api_key(key_name: str, expires_at=None, token_quota: int
     )
 
 async def get_router_api_keys():
-    """Get all router API keys with their limits and usage."""
+    """Get all router API keys with their limits and usage.
+
+    Includes key_value: the dashboard's copy button needs it. Nothing here
+    is more sensitive than the DB row itself -- the value was already stored
+    in plaintext, this just lets the owner see it again after the
+    show-it-once creation modal closes.
+    """
     return await fetch(
-        """SELECT id, key_name, created_at, last_used_at, is_active,
+        """SELECT id, key_name, key_value, created_at, last_used_at, is_active,
                   expires_at, token_quota, tokens_used, allowed_models, model_prompts, model_aliases
            FROM router_api_keys ORDER BY created_at DESC"""
     )

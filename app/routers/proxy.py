@@ -274,6 +274,14 @@ def _extract_cached_tokens(openai_resp: dict) -> int:
     return 0
 
 
+# A dead or unreachable custom-provider host used to hang for the full
+# 300s before failing -- long enough that Playground just looked frozen.
+# Connect fails fast (a live host completes TCP+TLS in well under this);
+# read stays generous since legitimate generation can genuinely take a
+# while.
+_CUSTOM_PROVIDER_TIMEOUT = httpx.Timeout(connect=10.0, read=180.0, write=15.0, pool=10.0)
+
+
 async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool, display_model: str = None):
     """
     Send an Anthropic-shaped request to an admin-added custom provider and
@@ -317,7 +325,7 @@ async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool, di
                 upstream_payload = dict(payload)
 
                 if not stream:
-                    async with httpx.AsyncClient(timeout=300) as client:
+                    async with httpx.AsyncClient(timeout=_CUSTOM_PROVIDER_TIMEOUT) as client:
                         resp = await client.post(url, headers=headers, json=upstream_payload)
                     if resp.status_code == 200:
                         return "json", 200, resp.json()
@@ -327,7 +335,7 @@ async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool, di
                         body = {"error": {"message": resp.text}}
                     last_status, last_body = resp.status_code, body
                 else:
-                    client = httpx.AsyncClient(timeout=300)
+                    client = httpx.AsyncClient(timeout=_CUSTOM_PROVIDER_TIMEOUT)
                     req = client.build_request("POST", url, headers=headers, json=upstream_payload)
                     resp = await client.send(req, stream=True)
                     if resp.status_code == 200:
@@ -361,7 +369,7 @@ async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool, di
                 upstream_payload["stream"] = stream
 
                 if not stream:
-                    async with httpx.AsyncClient(timeout=300) as client:
+                    async with httpx.AsyncClient(timeout=_CUSTOM_PROVIDER_TIMEOUT) as client:
                         resp = await client.post(url, headers=headers, json=upstream_payload)
                     if resp.status_code == 200:
                         anthropic_resp = to_anthropic_response(resp.json(), shown_model, msg_id)
@@ -372,7 +380,7 @@ async def _dispatch_custom_provider(prefix: str, payload: dict, stream: bool, di
                         body = {"error": {"message": resp.text}}
                     last_status, last_body = resp.status_code, body
                 else:
-                    client = httpx.AsyncClient(timeout=300)
+                    client = httpx.AsyncClient(timeout=_CUSTOM_PROVIDER_TIMEOUT)
                     req = client.build_request("POST", url, headers=headers, json=upstream_payload)
                     resp = await client.send(req, stream=True)
                     if resp.status_code == 200:
