@@ -1749,19 +1749,29 @@ async def chat_completions(request: Request):
             if effective_status == 200:
                 choice = (content.get("choices") or [{}])[0]
                 message = choice.get("message") or {}
-                assistant_content = message.get("content")
-                if not assistant_content and message.get("tool_calls"):
-                    assistant_content = json.dumps(message.get("tool_calls"))
+                real_content = message.get("content")
 
-                # Strip thinking tags for -thinking/-agentic models in OpenAI format
-                if assistant_content and isinstance(assistant_content, str):
+                # Strip thinking tags for -thinking/-agentic models in OpenAI format.
+                # Only touches real_content -- a tool-call-only message has no
+                # `content` at all, and the JSON-dump fallback built below (for
+                # brain memory, which needs *something* to log) must never get
+                # written back into the actual response's `content` field, or a
+                # pure tool call comes back with its content replaced by a
+                # stringified copy of its own tool_calls array.
+                if real_content and isinstance(real_content, str):
                     if requested_model.endswith(("-thinking", "-agentic", "-thinking-agentic")):
                         import re
-                        assistant_content = re.sub(r'<thinking>.*?</thinking>\s*', '', assistant_content, flags=re.DOTALL)
-                        # Update content in response
+                        real_content = re.sub(r'<thinking>.*?</thinking>\s*', '', real_content, flags=re.DOTALL)
                         if "choices" in content and len(content["choices"]) > 0:
                             if "message" in content["choices"][0]:
-                                content["choices"][0]["message"]["content"] = assistant_content
+                                content["choices"][0]["message"]["content"] = real_content
+
+                # Brain memory needs some text to log even for a pure tool
+                # call; this fallback is intentionally kept separate from
+                # real_content above so it never leaks into the response.
+                assistant_content = real_content
+                if not assistant_content and message.get("tool_calls"):
+                    assistant_content = json.dumps(message.get("tool_calls"))
 
                 if user_message_text:
                     await _save_brain_exchange(
