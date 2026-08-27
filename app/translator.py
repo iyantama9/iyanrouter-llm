@@ -1,4 +1,5 @@
 import json
+import re
 import uuid
 from app.config import SHOW_REASONING
 
@@ -217,7 +218,14 @@ def build_openai_request(body, provider="kc", session_history=None):
     elif provider == "qc":
         messages = normalize_for_qwen(messages)
 
-    if config.AUGMENT_SYSTEM_PROMPT and not is_qwen_image:
+    # Tools present means an agentic/tool-driven client (Claude Code and
+    # similar) is calling, with its own detailed system prompt describing
+    # exactly how it expects to work. Prepending "structure your answer as
+    # Task 1/Task 2/Summary, use fenced code blocks" on top of that pushes
+    # the model toward narrating in prose instead of calling the tools it
+    # was just given -- the opposite of what an agentic caller wants. Only
+    # add it for plain conversational requests, where it actually helps.
+    if config.AUGMENT_SYSTEM_PROMPT and not is_qwen_image and not body.get("tools"):
         if messages and messages[0]["role"] == "system":
             messages[0]["content"] = _ROUTER_BEHAVIOR + messages[0]["content"]
         else:
@@ -501,17 +509,44 @@ async def stream_anthropic_filter(anthropic_stream_iter):
             yield f"{line}\n\n"
 
 async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0, token_tracker=None):
+    # Anthropic's block protocol is strict: only one content block may be
+    # open at a time, and once a block is stopped its index is never reused.
+    # `current` tracks whichever block (if any) is presently open --
+    # {"kind": "text"|"thinking"|"tool", "index": N, ...}. Every place that
+    # wants to emit content first checks whether `current` already matches
+    # what it needs; if not, it closes `current` and opens a fresh block.
+    # An upstream OpenAI-shaped stream has no such rule (a delta can carry
+    # both `content` and `tool_calls` in the same chunk, and text can
+    # resume after a tool call), so without this, text and tool_use blocks
+    # ended up interleaved on the wire -- valid enough for something that
+    # just concatenates deltas naively, but a protocol violation that broke
+    # strict Anthropic-SDK clients (the exact difference between "chat works,
+    # agentic tool use doesn't").
+    current = None
     tool_calls = {}
-    reasoning_opened = False
-    reasoning_closed = False
-    text_opened = False
     next_block = 0
     finish_reason = "stop"
     output_tokens = 0
-    reasoning_block_idx = None
-    text_block_idx = None
     text_buffer = ""
     in_text_thinking = False
+
+    def stop_current():
+        nonlocal current
+        if current is None:
+            return None
+        idx = current["index"]
+        current = None
+        return f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': idx})}\n\n"
+
+    def open_block(kind, block):
+        nonlocal current, next_block
+        idx = next_block
+        next_block += 1
+        current = {"kind": kind, "index": idx}
+        return idx, f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': idx, 'content_block': block})}\n\n"
+
+    def delta_event(index, delta):
+        return f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': index, 'delta': delta})}\n\n"
 
     # Check for error in first line before yielding message_start
     first_chunk = None
@@ -598,13 +633,14 @@ async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0, toke
         # Stream reasoning content as native Anthropic thinking blocks (for models that support reasoning_content)
         reasoning = delta.get("reasoning_content")
         if reasoning and SHOW_REASONING:
-            if not reasoning_opened:
-                reasoning_opened = True
-                reasoning_block_idx = next_block
-                next_block += 1
-                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': reasoning_block_idx, 'content_block': {'type': 'thinking', 'thinking': ''}})}\n\n"
+            if current is None or current["kind"] != "thinking":
+                stop_evt = stop_current()
+                if stop_evt:
+                    yield stop_evt
+                idx, start_evt = open_block("thinking", {"type": "thinking", "thinking": ""})
+                yield start_evt
             output_tokens += 1
-            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': reasoning_block_idx, 'delta': {'type': 'thinking_delta', 'thinking': reasoning}})}\n\n"
+            yield delta_event(current["index"], {"type": "thinking_delta", "thinking": reasoning})
 
         text = delta.get("content")
         if text:
@@ -612,33 +648,29 @@ async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0, toke
             while True:
                 if not in_text_thinking:
                     # Look for opening tags case-insensitively with regex
-                    import re
                     match_open = re.search(r'<(think|thinking|thought|thoughts|thinking_process)\b[^>]*>', text_buffer, re.IGNORECASE)
                     if match_open:
                         i = match_open.start()
                         tag_len = len(match_open.group(0))
-                        
+
                         # Send text before the tag
                         pre_text = text_buffer[:i]
                         if pre_text:
-                            if reasoning_opened and not reasoning_closed:
-                                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
-                                reasoning_closed = True
-                            if not text_opened:
-                                text_opened = True
-                                text_block_idx = next_block
-                                next_block += 1
-                                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_idx, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_idx, 'delta': {'type': 'text_delta', 'text': pre_text}})}\n\n"
-                        
-                        # Open reasoning block
-                        if not reasoning_opened or reasoning_closed:
-                            reasoning_opened = True
-                            reasoning_closed = False
-                            reasoning_block_idx = next_block
-                            next_block += 1
-                            yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': reasoning_block_idx, 'content_block': {'type': 'thinking', 'thinking': ''}})}\n\n"
-                        
+                            if current is None or current["kind"] != "text":
+                                stop_evt = stop_current()
+                                if stop_evt:
+                                    yield stop_evt
+                                idx, start_evt = open_block("text", {"type": "text", "text": ""})
+                                yield start_evt
+                            yield delta_event(current["index"], {"type": "text_delta", "text": pre_text})
+
+                        # Switch to a thinking block for the tagged content
+                        stop_evt = stop_current()
+                        if stop_evt:
+                            yield stop_evt
+                        idx, start_evt = open_block("thinking", {"type": "thinking", "thinking": ""})
+                        yield start_evt
+
                         in_text_thinking = True
                         text_buffer = text_buffer[i + tag_len:]
                     else:
@@ -646,32 +678,38 @@ async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0, toke
                         if len(text_buffer) > 20:
                             safe_send = text_buffer[:-20]
                             text_buffer = text_buffer[-20:]
-                            if reasoning_opened and not reasoning_closed:
-                                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
-                                reasoning_closed = True
-                            if not text_opened:
-                                text_opened = True
-                                text_block_idx = next_block
-                                next_block += 1
-                                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_idx, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_idx, 'delta': {'type': 'text_delta', 'text': safe_send}})}\n\n"
+                            if current is None or current["kind"] != "text":
+                                stop_evt = stop_current()
+                                if stop_evt:
+                                    yield stop_evt
+                                idx, start_evt = open_block("text", {"type": "text", "text": ""})
+                                yield start_evt
+                            yield delta_event(current["index"], {"type": "text_delta", "text": safe_send})
                         break
                 else:
                     # Look for closing tags case-insensitively with regex
-                    import re
                     match_close = re.search(r'</(think|thinking|thought|thoughts|thinking_process)\b[^>]*>', text_buffer, re.IGNORECASE)
                     if match_close:
                         i = match_close.start()
                         tag_len = len(match_close.group(0))
-                        
-                        # Send reasoning before the tag
+
+                        # Send reasoning before the tag. A tool call in a
+                        # prior chunk may have closed this block already
+                        # (in_text_thinking survives that; `current` doesn't)
+                        # -- reopen rather than deref a None `current`.
                         pre_reasoning = text_buffer[:i]
                         if pre_reasoning:
-                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': reasoning_block_idx, 'delta': {'type': 'thinking_delta', 'thinking': pre_reasoning}})}\n\n"
-                        
-                        # Close reasoning block
-                        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
-                        reasoning_closed = True
+                            if current is None or current["kind"] != "thinking":
+                                stop_evt = stop_current()
+                                if stop_evt:
+                                    yield stop_evt
+                                idx, start_evt = open_block("thinking", {"type": "thinking", "thinking": ""})
+                                yield start_evt
+                            yield delta_event(current["index"], {"type": "thinking_delta", "thinking": pre_reasoning})
+
+                        stop_evt = stop_current()
+                        if stop_evt:
+                            yield stop_evt
                         in_text_thinking = False
                         text_buffer = text_buffer[i + tag_len:]
                     else:
@@ -679,56 +717,95 @@ async def stream_as_anthropic(openai_stream, model, msg_id, input_tokens=0, toke
                         if len(text_buffer) > 20:
                             safe_send = text_buffer[:-20]
                             text_buffer = text_buffer[-20:]
-                            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': reasoning_block_idx, 'delta': {'type': 'thinking_delta', 'thinking': safe_send}})}\n\n"
+                            if current is None or current["kind"] != "thinking":
+                                stop_evt = stop_current()
+                                if stop_evt:
+                                    yield stop_evt
+                                idx, start_evt = open_block("thinking", {"type": "thinking", "thinking": ""})
+                                yield start_evt
+                            yield delta_event(current["index"], {"type": "thinking_delta", "thinking": safe_send})
                         break
 
-        for tc_delta in delta.get("tool_calls") or []:
-            # Close reasoning block before tool calls
-            if reasoning_opened and not reasoning_closed:
-                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
-                reasoning_closed = True
+        tc_deltas = delta.get("tool_calls") or []
+        if tc_deltas and text_buffer:
+            # A tool call starting always ends whatever text/thinking was in
+            # progress -- including anything still held back in text_buffer
+            # for tag-boundary safety, which would otherwise get silently
+            # attributed to the wrong block (or lost) once a new one opens.
+            # The buffer may hold content even if no block was opened yet
+            # (still under the 20-char safety margin), so open one if needed
+            # rather than assuming `current` already points at it.
+            kind = "thinking" if in_text_thinking else "text"
+            if current is None or current["kind"] != kind:
+                stop_evt = stop_current()
+                if stop_evt:
+                    yield stop_evt
+                block_payload = {"type": "thinking", "thinking": ""} if kind == "thinking" else {"type": "text", "text": ""}
+                _, start_evt = open_block(kind, block_payload)
+                yield start_evt
+            delta_type = "thinking_delta" if kind == "thinking" else "text_delta"
+            delta_key = "thinking" if kind == "thinking" else "text"
+            yield delta_event(current["index"], {"type": delta_type, delta_key: text_buffer})
+            text_buffer = ""
+            in_text_thinking = False
 
+        for tc_delta in tc_deltas:
             idx = tc_delta.get("index", 0)
-            if idx not in tool_calls:
-                block_index = next_block
-                next_block += 1
-                tool_calls[idx] = {
-                    "id": tc_delta.get("id", f"call_{uuid.uuid4().hex[:8]}"),
-                    "name": tc_delta.get("function", {}).get("name", ""),
-                    "arguments": "",
-                    "block_index": block_index,
-                }
-                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': tool_calls[idx]['id'], 'name': tool_calls[idx]['name'], 'input': {}}})}\n\n"
+            needs_new_block = idx not in tool_calls or current is None or current.get("tool_idx") != idx
+            if needs_new_block:
+                stop_evt = stop_current()
+                if stop_evt:
+                    yield stop_evt
+                if idx not in tool_calls:
+                    block_index = next_block
+                    next_block += 1
+                    tool_calls[idx] = {
+                        "id": tc_delta.get("id", f"call_{uuid.uuid4().hex[:8]}"),
+                        "name": tc_delta.get("function", {}).get("name", ""),
+                        "block_index": block_index,
+                    }
+                    current = {"kind": "tool", "index": block_index, "tool_idx": idx}
+                    yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': block_index, 'content_block': {'type': 'tool_use', 'id': tool_calls[idx]['id'], 'name': tool_calls[idx]['name'], 'input': {}}})}\n\n"
+                else:
+                    # The upstream switched back to a tool-call index whose
+                    # block was already stopped when something else took over
+                    # -- not really representable per the protocol without
+                    # full buffering, but routing its arguments back to the
+                    # original block index is the least-bad option: it keeps
+                    # the JSON for that call intact rather than starting a
+                    # second, bogus tool_use block for the same call. Not
+                    # something observed from any provider this router talks
+                    # to today, since none of them interleave >1 tool call.
+                    current = {"kind": "tool", "index": tool_calls[idx]["block_index"], "tool_idx": idx}
 
             args_delta = tc_delta.get("function", {}).get("arguments", "")
             if args_delta:
-                tool_calls[idx]["arguments"] += args_delta
                 output_tokens += 1
-                yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': tool_calls[idx]['block_index'], 'delta': {'type': 'input_json_delta', 'partial_json': args_delta}})}\n\n"
+                yield delta_event(tool_calls[idx]["block_index"], {"type": "input_json_delta", "partial_json": args_delta})
 
     # Flush any remaining text in the buffer
     if text_buffer:
         if in_text_thinking:
-            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': reasoning_block_idx, 'delta': {'type': 'thinking_delta', 'thinking': text_buffer}})}\n\n"
+            if current is None or current["kind"] != "thinking":
+                stop_evt = stop_current()
+                if stop_evt:
+                    yield stop_evt
+                idx, start_evt = open_block("thinking", {"type": "thinking", "thinking": ""})
+                yield start_evt
+            yield delta_event(current["index"], {"type": "thinking_delta", "thinking": text_buffer})
         else:
-            if reasoning_opened and not reasoning_closed:
-                yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
-                reasoning_closed = True
-            if not text_opened:
-                text_opened = True
-                text_block_idx = next_block
-                next_block += 1
-                yield f"event: content_block_start\ndata: {json.dumps({'type': 'content_block_start', 'index': text_block_idx, 'content_block': {'type': 'text', 'text': ''}})}\n\n"
-            yield f"event: content_block_delta\ndata: {json.dumps({'type': 'content_block_delta', 'index': text_block_idx, 'delta': {'type': 'text_delta', 'text': text_buffer}})}\n\n"
+            if current is None or current["kind"] != "text":
+                stop_evt = stop_current()
+                if stop_evt:
+                    yield stop_evt
+                idx, start_evt = open_block("text", {"type": "text", "text": ""})
+                yield start_evt
+            yield delta_event(current["index"], {"type": "text_delta", "text": text_buffer})
 
-    # Close any remaining open blocks
-    if reasoning_opened and not reasoning_closed:
-        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': reasoning_block_idx})}\n\n"
-
-    if text_opened:
-        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': text_block_idx})}\n\n"
-    for tc in tool_calls.values():
-        yield f"event: content_block_stop\ndata: {json.dumps({'type': 'content_block_stop', 'index': tc['block_index']})}\n\n"
+    # Close whatever's still open
+    stop_evt = stop_current()
+    if stop_evt:
+        yield stop_evt
 
     stop_reason = "tool_use" if finish_reason == "tool_calls" else "end_turn"
     yield f"event: message_delta\ndata: {json.dumps({'type': 'message_delta', 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': {'output_tokens': output_tokens}})}\n\n"
